@@ -169,6 +169,13 @@ extern int rl_dismiss_suggestion (int, int);
 extern int rl_suggestion_cycle_previous (int, int);
 extern int rl_suggestion_cycle_next (int, int);
 
+/* Predictor registry for inline suggestions. */
+extern int rl_add_predictor (const char *, rl_predictor_func_t *, int);
+extern int rl_remove_predictor (const char *);
+
+/* Built-in history predictor (can be registered at any priority). */
+extern char *_rl_history_predictor (const char *, int, int *, char **);
+
 /* Bindable commands for killing and yanking text, and managing the kill ring. */
 extern int rl_kill_word (int, int);
 extern int rl_backward_kill_word (int, int);

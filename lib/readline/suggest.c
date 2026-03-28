@@ -82,6 +82,18 @@ static char *_rl_suggestion_replacement = (char *)NULL;
    -1 means no match / initial state.  Used for cycling. */
 static int _rl_suggestion_match_index = -1;
 
+/* ---- Predictor registry ---- */
+
+/* A registered prediction source. */
+typedef struct _rl_predictor_entry {
+  char *name;
+  rl_predictor_func_t *func;
+  int priority;
+  struct _rl_predictor_entry *next;
+} rl_predictor_entry_t;
+
+static rl_predictor_entry_t *_rl_predictors = (rl_predictor_entry_t *)NULL;
+
 /* Clear any active suggestion and free memory. */
 void
 _rl_suggestion_clear (void)
@@ -253,6 +265,123 @@ suggestion_from_history (void)
   return suggestion_from_history_starting (hlen - 1, -1);
 }
 
+/* ---- Predictor registry implementation ---- */
+
+/* Register a predictor.  Lower PRIORITY values are queried first.
+   Returns 0 on success, -1 if NAME already exists or on error. */
+int
+rl_add_predictor (const char *name, rl_predictor_func_t *func, int priority)
+{
+  rl_predictor_entry_t *entry, *prev, *cur;
+
+  if (name == NULL || func == NULL)
+    return -1;
+
+  /* Reject duplicate names */
+  for (cur = _rl_predictors; cur; cur = cur->next)
+    if (strcmp (cur->name, name) == 0)
+      return -1;
+
+  entry = (rl_predictor_entry_t *)xmalloc (sizeof (rl_predictor_entry_t));
+  entry->name = savestring (name);
+  entry->func = func;
+  entry->priority = priority;
+  entry->next = (rl_predictor_entry_t *)NULL;
+
+  /* Insert sorted by priority (lower = first) */
+  prev = (rl_predictor_entry_t *)NULL;
+  cur = _rl_predictors;
+  while (cur && cur->priority <= priority)
+    {
+      prev = cur;
+      cur = cur->next;
+    }
+  entry->next = cur;
+  if (prev)
+    prev->next = entry;
+  else
+    _rl_predictors = entry;
+
+  return 0;
+}
+
+/* Remove a predictor by name.  Returns 0 on success, -1 if not found. */
+int
+rl_remove_predictor (const char *name)
+{
+  rl_predictor_entry_t *prev, *cur;
+
+  if (name == NULL)
+    return -1;
+
+  prev = (rl_predictor_entry_t *)NULL;
+  for (cur = _rl_predictors; cur; prev = cur, cur = cur->next)
+    {
+      if (strcmp (cur->name, name) == 0)
+	{
+	  if (prev)
+	    prev->next = cur->next;
+	  else
+	    _rl_predictors = cur->next;
+	  xfree (cur->name);
+	  xfree (cur);
+	  return 0;
+	}
+    }
+  return -1;
+}
+
+/* Built-in history predictor with the standard predictor signature.
+   Wraps suggestion_from_history(). */
+char *
+_rl_history_predictor (const char *line, int len, int *is_substring, char **replacement)
+{
+  char *result;
+
+  *is_substring = 0;
+  *replacement = (char *)NULL;
+
+  result = suggestion_from_history ();
+  if (result)
+    {
+      /* Copy match state out through the predictor interface.
+	 suggestion_from_history() sets these module-level statics;
+	 transfer ownership to the caller via output params and clear
+	 the statics so dispatch can set them cleanly. */
+      *is_substring = _rl_suggestion_is_replacement;
+      if (_rl_suggestion_replacement)
+	{
+	  *replacement = _rl_suggestion_replacement;
+	  _rl_suggestion_replacement = (char *)NULL;
+	}
+      _rl_suggestion_is_replacement = 0;
+    }
+  return result;
+}
+
+/* Walk the predictor list, calling each in priority order.
+   Returns the first non-NULL result. */
+static char *
+_rl_predictor_dispatch (int *is_substring_out, char **replacement_out)
+{
+  rl_predictor_entry_t *p;
+  char *result;
+
+  *is_substring_out = 0;
+  *replacement_out = (char *)NULL;
+
+  for (p = _rl_predictors; p; p = p->next)
+    {
+      result = (*p->func) (rl_line_buffer, rl_end, is_substring_out, replacement_out);
+      if (result != NULL)
+	return result;
+      /* Reset for next predictor */
+      *is_substring_out = 0;
+      *replacement_out = (char *)NULL;
+    }
+  return (char *)NULL;
+}
+
 /* Update the suggestion state. Called before each redisplay from
    _rl_internal_char_cleanup(). */
 void
@@ -364,11 +493,29 @@ _rl_suggestion_update (void)
       _rl_suggestion_cached_line = (char *)NULL;
     }
 
-  suggestion = suggestion_from_history ();
-  if (suggestion)
+  if (_rl_predictors)
     {
-      _rl_suggestion_text = suggestion;
-      _rl_suggestion_len = strlen (suggestion);
+      int is_sub = 0;
+      char *repl = (char *)NULL;
+
+      suggestion = _rl_predictor_dispatch (&is_sub, &repl);
+      if (suggestion)
+	{
+	  _rl_suggestion_text = suggestion;
+	  _rl_suggestion_len = strlen (suggestion);
+	  _rl_suggestion_is_replacement = is_sub;
+	  _rl_suggestion_replacement = repl;
+	}
+    }
+  else
+    {
+      /* Fallback: no predictors registered, use built-in history search */
+      suggestion = suggestion_from_history ();
+      if (suggestion)
+	{
+	  _rl_suggestion_text = suggestion;
+	  _rl_suggestion_len = strlen (suggestion);
+	}
     }
 
   /* Update cache */

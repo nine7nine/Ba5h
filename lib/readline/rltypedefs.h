@@ -87,6 +87,13 @@ typedef char *rl_cpifunc_t (int);
 typedef char *rl_cpcpfunc_t (char  *);
 typedef char *rl_cpcppfunc_t (char  **);
 
+/* Predictor function for inline suggestions.
+   Receives the current line and length.  Sets *IS_SUBSTRING to non-zero
+   if this is a substring (full-replacement) match, and *REPLACEMENT to
+   a malloc'd full-line string for substring matches.
+   Returns a malloc'd suffix string on success, or NULL to pass. */
+typedef char *rl_predictor_func_t (const char *, int, int *, char **);
+
 #endif /* _RL_FUNCTION_TYPEDEF */
 
 #ifdef __cplusplus

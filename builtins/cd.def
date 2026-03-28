@@ -49,6 +49,7 @@ $PRODUCES cd.c
 #include "maxpath.h"
 #include "common.h"
 #include "bashgetopt.h"
+#include "../frecency.h"
 
 #if !defined (errno)
 extern int errno;
@@ -173,6 +174,10 @@ bindpwd (int no_symlinks)
 
   if (dirname && dirname != the_current_working_directory)
     free (dirname);
+
+  /* Track successful directory change for frecency suggestions. */
+  if (r == EXECUTION_SUCCESS && the_current_working_directory)
+    frecency_update (the_current_working_directory);
 
   return (r);
 }

@@ -73,6 +73,8 @@
 #include <glob/glob.h>
 
 #include "syntax_highlight.h"
+#include "hashcmd.h"
+#include "frecency.h"
 
 #if defined (ALIAS)
 #  include "alias.h"
@@ -448,6 +450,186 @@ enable_hostname_completion (int on_or_off)
   return (old_value);
 }
 
+/* ---- Inline suggestion predictors ---- */
+
+/* Command-name predictor: suggest command names from in-memory sources.
+   Only active when the user is typing a simple command word (no whitespace
+   or shell metacharacters in the buffer).  Searches aliases, builtins,
+   shell functions, and the hashed command table -- all in-memory, no I/O. */
+static char *
+bash_command_predictor (const char *line, int len, int *is_substring, char **replacement)
+{
+  int i;
+  const char *name;
+
+  *is_substring = 0;
+  *replacement = (char *)NULL;
+
+  if (len == 0)
+    return (char *)NULL;
+
+  /* Only predict for a simple command word: bail if there is whitespace
+     or any shell metacharacter in the buffer. */
+  for (i = 0; i < len; i++)
+    if (whitespace (line[i]) || strchr (";|&({`<>", line[i]))
+      return (char *)NULL;
+
+  /* Skip absolute/relative paths -- let the filesystem handle those. */
+  if (line[0] == '/' || line[0] == '.' || line[0] == '~')
+    return (char *)NULL;
+
+  /* 1. Aliases */
+#if defined (ALIAS)
+  {
+    alias_t **alist = all_aliases ();
+    if (alist)
+      {
+	for (i = 0; alist[i]; i++)
+	  {
+	    name = alist[i]->name;
+	    if (strncmp (name, line, len) == 0 && name[len] != '\0')
+	      {
+		char *result = savestring (name + len);
+		free (alist);
+		return result;
+	      }
+	  }
+	free (alist);
+      }
+  }
+#endif
+
+  /* 2. Shell builtins */
+  for (i = 0; i < num_shell_builtins; i++)
+    {
+      if ((shell_builtins[i].flags & BUILTIN_ENABLED) == 0)
+	continue;
+      if (!shell_builtins[i].function)
+	continue;
+      name = shell_builtins[i].name;
+      if (strncmp (name, line, len) == 0 && name[len] != '\0')
+	return savestring (name + len);
+    }
+
+  /* 3. Shell functions */
+  {
+    SHELL_VAR **flist = all_visible_functions ();
+    if (flist)
+      {
+	for (i = 0; flist[i]; i++)
+	  {
+	    name = flist[i]->name;
+	    if (strncmp (name, line, len) == 0 && name[len] != '\0')
+	      {
+		char *result = savestring (name + len);
+		free (flist);
+		return result;
+	      }
+	  }
+	free (flist);
+      }
+  }
+
+  /* 4. Hashed commands (already found in PATH, in-memory lookup) */
+  if (hashed_filenames)
+    {
+      BUCKET_CONTENTS *item;
+      int b;
+      for (b = 0; b < hashed_filenames->nbuckets; b++)
+	{
+	  for (item = hash_items (b, hashed_filenames); item; item = item->next)
+	    {
+	      name = item->key;
+	      if (strncmp (name, line, len) == 0 && name[len] != '\0')
+		return savestring (name + len);
+	    }
+	}
+    }
+
+  return (char *)NULL;
+}
+
+/* Directory frecency predictor: suggest directories from the frecency
+   database when the user is typing a cd command.  Only activates when
+   the line starts with "cd " followed by a partial directory name. */
+static char *
+bash_frecency_predictor (const char *line, int len, int *is_substring, char **replacement)
+{
+  const char *query;
+  int query_len;
+  char *match;
+
+  *is_substring = 0;
+  *replacement = (char *)NULL;
+
+  /* Only activate for "cd " prefix */
+  if (len < 4 || strncmp (line, "cd ", 3) != 0)
+    return (char *)NULL;
+
+  /* Also handle "cd -" specially -- don't predict */
+  if (len == 4 && line[3] == '-')
+    return (char *)NULL;
+
+  query = line + 3;
+  query_len = len - 3;
+
+  /* Skip leading whitespace after "cd " */
+  while (query_len > 0 && (*query == ' ' || *query == '\t'))
+    {
+      query++;
+      query_len--;
+    }
+
+  if (query_len <= 0)
+    return (char *)NULL;
+
+  /* Skip if user is typing an absolute path */
+  if (*query == '/' || *query == '~')
+    return (char *)NULL;
+
+  match = frecency_find (query, query_len);
+  if (match == NULL)
+    return (char *)NULL;
+
+  /* Return the suffix after what was typed: "cd <match_path>"
+     The suggestion is the remaining portion of the path. */
+  {
+    const char *basename;
+    int match_len = strlen (match);
+
+    /* Find where the query matches in the basename */
+    basename = strrchr (match, '/');
+    basename = basename ? basename + 1 : match;
+
+    /* The user typed "cd <query>", we want to suggest the rest.
+       Build: full_path minus the query portion at the end of basename.
+       Result is "cd <full_path>" with the typed prefix stripped. */
+    if (strncmp (basename, query, query_len) == 0)
+      {
+	/* Prefix match on basename: suggest as full replacement.
+	   The full suggestion line is "cd <match>". */
+	char *full_line;
+	int full_len;
+
+	full_len = 3 + match_len;
+	full_line = (char *)xmalloc (full_len + 1);
+	snprintf (full_line, full_len + 1, "cd %s", match);
+	xfree (match);
+
+	/* This is a full replacement (the entire "cd ..." line) */
+	*is_substring = 1;
+	*replacement = full_line;
+
+	/* The suffix after the typed text */
+	return savestring (full_line + len);
+      }
+
+    xfree (match);
+  }
+
+  return (char *)NULL;
+}
+
 /* Called once from parse.y if we are going to use readline. */
 void
 initialize_readline (void)
@@ -647,6 +829,14 @@ initialize_readline (void)
 
   /* Register syntax highlighting callback. */
   rl_syntax_highlight_func = bash_syntax_highlight;
+
+  /* Register inline suggestion predictors (lower priority = tried first). */
+  rl_add_predictor ("history", _rl_history_predictor, 10);
+  rl_add_predictor ("frecency", bash_frecency_predictor, 15);
+  rl_add_predictor ("command", bash_command_predictor, 20);
+
+  /* Load the frecency database from disk. */
+  frecency_init ();
 
   bash_readline_initialized = 1;
 }

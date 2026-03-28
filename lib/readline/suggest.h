@@ -57,4 +57,11 @@ extern int rl_dismiss_suggestion (int, int);
 extern int rl_suggestion_cycle_previous (int, int);
 extern int rl_suggestion_cycle_next (int, int);
 
+/* Predictor registry for pluggable prediction sources. */
+extern int rl_add_predictor (const char *, rl_predictor_func_t *, int);
+extern int rl_remove_predictor (const char *);
+
+/* Built-in history predictor, exported for registration. */
+extern char *_rl_history_predictor (const char *, int, int *, char **);
+
 #endif /* _RL_SUGGEST_H_ */
