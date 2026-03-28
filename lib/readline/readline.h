@@ -633,6 +633,14 @@ extern rl_getc_func_t *rl_getc_function;
 
 extern rl_voidfunc_t *rl_redisplay_function;
 
+/* If non-null, called during redisplay to produce per-character face
+   attributes for syntax highlighting.  Receives the line buffer, its
+   length, and a face array (pre-filled with FACE_NORMAL '0') to fill
+   in.  Face values: '3'=keyword, '4'=builtin, '5'=string, '6'=variable,
+   '7'=comment, '8'=operator, '9'=redirect, ':'=error. */
+typedef void rl_highlight_func_t (const char *, int, char *);
+extern rl_highlight_func_t *rl_syntax_highlight_func;
+
 extern rl_vintfunc_t *rl_prep_term_function;
 extern rl_voidfunc_t *rl_deprep_term_function;
 

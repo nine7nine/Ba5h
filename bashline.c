@@ -72,6 +72,8 @@
 
 #include <glob/glob.h>
 
+#include "syntax_highlight.h"
+
 #if defined (ALIAS)
 #  include "alias.h"
 #endif
@@ -642,6 +644,9 @@ initialize_readline (void)
   if (posixly_correct)
     posix_readline_initialize (1);
 #endif
+
+  /* Register syntax highlighting callback. */
+  rl_syntax_highlight_func = bash_syntax_highlight;
 
   bash_readline_initialized = 1;
 }

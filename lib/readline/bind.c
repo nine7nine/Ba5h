@@ -1886,6 +1886,7 @@ static const struct {
   { "enable-active-region",	&_rl_enable_active_region,	0 },
   { "enable-bracketed-paste",	&_rl_enable_bracketed_paste,	V_SPECIAL },
   { "enable-inline-suggestions",	&_rl_enable_inline_suggestions,	0 },
+  { "enable-syntax-highlighting",	&_rl_enable_syntax_highlighting, 0 },
   { "enable-keypad",		&_rl_enable_keypad,		0 },
   { "enable-meta-key",		&_rl_enable_meta,		0 },
   { "expand-tilde",		&rl_complete_with_tilde_expansion, 0 },
@@ -1988,6 +1989,14 @@ static int sv_viins_modestr (const char *);
 static int sv_vicmd_modestr (const char *);
 static int sv_suggestion_color (const char *);
 static int sv_suggestion_strategy (const char *);
+static int sv_syntax_keyword_color (const char *);
+static int sv_syntax_builtin_color (const char *);
+static int sv_syntax_string_color (const char *);
+static int sv_syntax_variable_color (const char *);
+static int sv_syntax_comment_color (const char *);
+static int sv_syntax_operator_color (const char *);
+static int sv_syntax_redirect_color (const char *);
+static int sv_syntax_error_color (const char *);
 
 static const struct {
   const char * const name;
@@ -2009,8 +2018,16 @@ static const struct {
   { "keyseq-timeout",	V_INT,		sv_seqtimeout },
   { "suggestion-strategy", V_STRING,	sv_suggestion_strategy },
   { "suggestion-text-color", V_STRING,	sv_suggestion_color },
+  { "syntax-builtin-color", V_STRING,	sv_syntax_builtin_color },
+  { "syntax-comment-color", V_STRING,	sv_syntax_comment_color },
+  { "syntax-error-color", V_STRING,	sv_syntax_error_color },
+  { "syntax-keyword-color", V_STRING,	sv_syntax_keyword_color },
+  { "syntax-operator-color", V_STRING,	sv_syntax_operator_color },
+  { "syntax-redirect-color", V_STRING,	sv_syntax_redirect_color },
+  { "syntax-string-color", V_STRING,	sv_syntax_string_color },
+  { "syntax-variable-color", V_STRING,	sv_syntax_variable_color },
   { "vi-cmd-mode-string", V_STRING,	sv_vicmd_modestr },
-  { "vi-ins-mode-string", V_STRING,	sv_viins_modestr }, 
+  { "vi-ins-mode-string", V_STRING,	sv_viins_modestr },
   { (char *)NULL,	0, (_rl_sv_func_t *)0 }
 };
 
@@ -2233,6 +2250,16 @@ sv_suggestion_color (const char *value)
 {
   return (_rl_reset_suggestion_color (0, value));
 }
+
+/* Syntax highlighting color setters.  Face indices must match terminal.c. */
+static int sv_syntax_keyword_color (const char *v)  { return _rl_reset_syntax_color (3, 0, v); }
+static int sv_syntax_builtin_color (const char *v)  { return _rl_reset_syntax_color (4, 0, v); }
+static int sv_syntax_string_color (const char *v)   { return _rl_reset_syntax_color (5, 0, v); }
+static int sv_syntax_variable_color (const char *v) { return _rl_reset_syntax_color (6, 0, v); }
+static int sv_syntax_comment_color (const char *v)  { return _rl_reset_syntax_color (7, 0, v); }
+static int sv_syntax_operator_color (const char *v) { return _rl_reset_syntax_color (8, 0, v); }
+static int sv_syntax_redirect_color (const char *v) { return _rl_reset_syntax_color (9, 0, v); }
+static int sv_syntax_error_color (const char *v)    { return _rl_reset_syntax_color (10, 0, v); }
 
 static int
 sv_suggestion_strategy (const char *value)

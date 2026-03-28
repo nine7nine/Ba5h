@@ -134,7 +134,31 @@ static int _rl_col_width (const char *, int, int, int);
 #define FACE_NORMAL	'0'
 #define FACE_STANDOUT	'1'
 #define FACE_SUGGESTION	'2'
+#define FACE_KEYWORD	'3'
+#define FACE_BUILTIN	'4'
+#define FACE_STRING	'5'
+#define FACE_VARIABLE	'6'
+#define FACE_COMMENT	'7'
+#define FACE_OPERATOR	'8'
+#define FACE_REDIRECT	'9'
+#define FACE_ERROR	':'
 #define FACE_INVALID	((char)1)
+
+/* Number of face types and validation macro.  Face chars are sequential
+   from '0' (48) through ':' (58), so FACE_INDEX gives a 0-based index. */
+#define FACE_COUNT	11
+#define FACE_INDEX(f)	((f) - '0')
+#define FACE_VALID(f)	(((f) >= '0' && (f) <= ':') || FACE_IS_GHOST(f))
+
+/* Ghost bit: OR'd into a syntax face for suggestion/ghost text.
+   Ghost faces render as italic + the base syntax color, so the user
+   sees syntax-highlighted suggestion text that's visually distinct
+   from committed (typed) text.  Base face '0'-':' lives in 0x30-0x3A;
+   with the ghost bit (0x40) set they become 0x70-0x7A ('p'-'z'). */
+#define FACE_GHOST_BIT	0x40
+#define FACE_GHOST(f)	((char)((f) | FACE_GHOST_BIT))
+#define FACE_UNGHOST(f)	((char)((f) & ~FACE_GHOST_BIT))
+#define FACE_IS_GHOST(f) ((f) & FACE_GHOST_BIT)
   
 /* **************************************************************** */
 /*								    */
@@ -165,6 +189,10 @@ static int _rl_col_width (const char *, int, int, int);
 
 /* Application-specific redisplay function. */
 rl_voidfunc_t *rl_redisplay_function = rl_redisplay;
+
+/* Syntax highlighting callback.  NULL by default; set by the application
+   (e.g. bash) to enable live command-line coloring. */
+rl_highlight_func_t *rl_syntax_highlight_func = (rl_highlight_func_t *)NULL;
 
 /* Global variables declared here. */
 /* What YOU turn on when you have handled all redisplay yourself. */
@@ -1048,6 +1076,18 @@ rl_redisplay (void)
      It maintains an array of line breaks for display (inv_lbreaks).
      This handles expanding tabs for display and displaying meta characters. */
   lb_linenum = 0;
+
+  /* Compute per-character syntax faces if a highlighter is registered. */
+  {
+    char *syntax_faces = (char *)NULL;
+    if (rl_syntax_highlight_func && _rl_enable_syntax_highlighting && rl_end > 0)
+      {
+	syntax_faces = (char *)xmalloc (rl_end + 1);
+	memset (syntax_faces, FACE_NORMAL, rl_end);
+	syntax_faces[rl_end] = '\0';
+	(*rl_syntax_highlight_func) (rl_line_buffer, rl_end, syntax_faces);
+      }
+
 #if defined (HANDLE_MULTIBYTE)
   in = 0;
   if (mb_cur_max > 1 && rl_byte_oriented == 0)
@@ -1068,9 +1108,12 @@ rl_redisplay (void)
   for (in = 0; in < rl_end; in++)
 #endif
     {
-      if (in == hl_begin)
+      /* Active region (STANDOUT) takes priority over syntax faces. */
+      if (hl_begin >= 0 && in >= hl_begin && in < hl_end)
 	cur_face = FACE_STANDOUT;
-      else if (in == hl_end)
+      else if (syntax_faces)
+	cur_face = syntax_faces[in];
+      else
 	cur_face = FACE_NORMAL;
 
       c = (unsigned char)rl_line_buffer[in];
@@ -1244,6 +1287,10 @@ rl_redisplay (void)
         in++;
 #endif
     }
+  if (syntax_faces)
+    xfree (syntax_faces);
+  }  /* end syntax_faces block */
+
   invis_nul (&out);
   line_totbytes = out;
   if (cpos_buffer_position < 0)
@@ -1253,6 +1300,8 @@ rl_redisplay (void)
     }
 
   /* Render inline suggestion ghost text with FACE_SUGGESTION.
+     Ghost text is uniformly suggestion-colored (blue).  The typed portion
+     in substring matches gets syntax highlighting so it stands out.
      For prefix matches: append the suggestion suffix after the typed text.
      For substring matches: rewrite the line area with the full replacement.
      cpos_buffer_position is already set, so the cursor stays at rl_point. */
@@ -1278,7 +1327,7 @@ rl_redisplay (void)
 	  {
 	    /* Substring match: rewind to line content start and render the
 	       full replacement text.  The portion matching the typed text is
-	       rendered with FACE_NORMAL; the rest with FACE_SUGGESTION.
+	       rendered with syntax faces; the rest with FACE_SUGGESTION.
 	       cpos_buffer_position is updated to the end of the matched
 	       portion so the cursor sits right after what was typed. */
 	    const char *repl = _rl_suggestion_get_replacement ();
@@ -1289,6 +1338,16 @@ rl_redisplay (void)
 		const char *match_pos;
 		int match_start, match_end;
 		char sface;
+		char *repl_faces = (char *)NULL;
+
+		/* Compute syntax faces for the typed portion */
+		if (rl_syntax_highlight_func && _rl_enable_syntax_highlighting)
+		  {
+		    repl_faces = (char *)xmalloc (rlen + 1);
+		    memset (repl_faces, FACE_NORMAL, rlen);
+		    repl_faces[rlen] = '\0';
+		    (*rl_syntax_highlight_func) (repl, rlen, repl_faces);
+		  }
 
 		match_pos = strstr (repl, rl_line_buffer);
 		match_start = match_pos ? (int)(match_pos - repl) : -1;
@@ -1300,8 +1359,11 @@ rl_redisplay (void)
 		si = 0;
 		while (si < rlen && scols < max_cols)
 		  {
-		    /* Choose face: normal for the typed portion, suggestion for the rest */
-		    sface = (si >= match_start && si < match_end) ? FACE_NORMAL : FACE_SUGGESTION;
+		    /* Typed portion: syntax face; ghost portion: suggestion */
+		    if (si >= match_start && si < match_end)
+		      sface = repl_faces ? repl_faces[si] : FACE_NORMAL;
+		    else
+		      sface = FACE_SUGGESTION;
 
 		    /* Record cursor position at end of the typed portion */
 		    if (si == match_end)
@@ -1338,14 +1400,13 @@ rl_redisplay (void)
 		if (match_end >= rlen)
 		  cpos_buffer_position = out;
 		invis_nul (&out);
+		xfree (repl_faces);
 	      }
 	  }
 	else
 	  {
 	    /* Prefix match: append the suggestion suffix after the typed text.
-	       Use lpos (column position) not byte offset -- the invisible line
-	       buffer may contain multi-byte prompt escapes that occupy zero
-	       screen columns. */
+	       Ghost suffix is uniformly FACE_SUGGESTION. */
 	    max_cols = _rl_screenwidth - lpos;
 
 	    if (max_cols > 0)
@@ -1855,23 +1916,45 @@ static void
 putc_face (int c, int face, char *cur_face)
 {
   char cf;
+  int cf_ghost, new_ghost;
+  char cf_base, new_base;
+
   cf = *cur_face;
   if (cf != face)
     {
-      if (cf != FACE_NORMAL && cf != FACE_STANDOUT && cf != FACE_SUGGESTION)
+      if (!FACE_VALID (cf) || !FACE_VALID (face))
 	return;
-      if (face != FACE_NORMAL && face != FACE_STANDOUT && face != FACE_SUGGESTION)
-	return;
-      /* Turn off the old face */
-      if (cf == FACE_STANDOUT)
+
+      cf_ghost = FACE_IS_GHOST (cf);
+      new_ghost = FACE_IS_GHOST (face);
+      cf_base = cf_ghost ? FACE_UNGHOST (cf) : cf;
+      new_base = new_ghost ? FACE_UNGHOST (face) : face;
+
+      /* Turn off the old base face */
+      if (cf_base == FACE_STANDOUT)
 	_rl_region_color_off ();
-      else if (cf == FACE_SUGGESTION)
+      else if (cf_base == FACE_SUGGESTION)
 	_rl_suggestion_color_off ();
-      /* Turn on the new face */
-      if (face == FACE_STANDOUT)
+      else if (cf_base != FACE_NORMAL)
+	_rl_syntax_color_off (cf_base);
+
+      /* Handle dim transitions for ghost text */
+      if (cf_ghost && !new_ghost)
+	fputs ("\033[22m", rl_outstream);	/* dim off */
+      else if (!cf_ghost && new_ghost)
+	fputs ("\033[2m", rl_outstream);	/* dim on */
+
+      /* Turn on the new base face.  Ghost text with FACE_NORMAL base
+         falls back to the suggestion color so it stays visually muted. */
+      if (new_base == FACE_STANDOUT)
 	_rl_region_color_on ();
-      else if (face == FACE_SUGGESTION)
+      else if (new_base == FACE_SUGGESTION)
 	_rl_suggestion_color_on ();
+      else if (new_ghost && new_base == FACE_NORMAL)
+	_rl_suggestion_color_on ();
+      else if (new_base != FACE_NORMAL)
+	_rl_syntax_color_on (new_base);
+
       *cur_face = face;
     }
   if (c != EOF)

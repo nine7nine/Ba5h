@@ -1050,6 +1050,100 @@ _rl_suggestion_color_off (void)
 
 /* **************************************************************** */
 /*								    */
+/*	Controlling color for syntax highlighting faces		    */
+/*								    */
+/* **************************************************************** */
+
+/* Face index constants -- must match display.c defines.
+   FACE char values '3' through ':' map to indices 3..10 via (c - '0'). */
+#define _RL_FACE_KEYWORD    3
+#define _RL_FACE_BUILTIN    4
+#define _RL_FACE_STRING     5
+#define _RL_FACE_VARIABLE   6
+#define _RL_FACE_COMMENT    7
+#define _RL_FACE_OPERATOR   8
+#define _RL_FACE_REDIRECT   9
+#define _RL_FACE_ERROR      10
+#define _RL_FACE_COUNT      11
+
+struct _rl_syntax_color {
+  char *start;
+  char *end;
+  const char *default_start;
+  const char *default_end;
+};
+
+static struct _rl_syntax_color _rl_syntax_colors[_RL_FACE_COUNT] = {
+  /* 0: NORMAL   */ { NULL, NULL, NULL, NULL },
+  /* 1: STANDOUT */ { NULL, NULL, NULL, NULL },
+  /* 2: SUGGEST  */ { NULL, NULL, NULL, NULL },
+  /* 3: KEYWORD  */ { NULL, NULL, "\033[94m",    "\033[0m" },  /* bright blue */
+  /* 4: BUILTIN  */ { NULL, NULL, "\033[96m",    "\033[0m" },  /* bright cyan */
+  /* 5: STRING   */ { NULL, NULL, "\033[92m",    "\033[0m" },  /* bright green */
+  /* 6: VARIABLE */ { NULL, NULL, "\033[93m",    "\033[0m" },  /* bright yellow */
+  /* 7: COMMENT  */ { NULL, NULL, "\033[90m",    "\033[0m" },  /* bright black (grey) */
+  /* 8: OPERATOR */ { NULL, NULL, "\033[97m",    "\033[0m" },  /* bright white */
+  /* 9: REDIRECT */ { NULL, NULL, "\033[38;5;183m", "\033[0m" },  /* light purple */
+  /* 10: ERROR   */ { NULL, NULL, "\033[38;5;210m", "\033[0m" },  /* light red/salmon */
+};
+
+int _rl_enable_syntax_highlighting = 0;
+
+void
+_rl_syntax_color_on (int face)
+{
+#ifndef __MSDOS__
+  int idx = face - '0';
+  if (idx < 3 || idx >= _RL_FACE_COUNT)
+    return;
+  if (_rl_syntax_colors[idx].start)
+    tputs (_rl_syntax_colors[idx].start, 1, _rl_output_character_function);
+  else if (_rl_syntax_colors[idx].default_start)
+    tputs ((char *)_rl_syntax_colors[idx].default_start, 1, _rl_output_character_function);
+#endif
+}
+
+void
+_rl_syntax_color_off (int face)
+{
+#ifndef __MSDOS__
+  int idx = face - '0';
+  if (idx < 3 || idx >= _RL_FACE_COUNT)
+    return;
+  if (_rl_syntax_colors[idx].end)
+    tputs (_rl_syntax_colors[idx].end, 1, _rl_output_character_function);
+  else if (_rl_syntax_colors[idx].default_end)
+    tputs ((char *)_rl_syntax_colors[idx].default_end, 1, _rl_output_character_function);
+#endif
+}
+
+int
+_rl_reset_syntax_color (int face_idx, int which, const char *value)
+{
+  int len;
+  char **target;
+
+  if (face_idx < 3 || face_idx >= _RL_FACE_COUNT)
+    return -1;
+
+  target = (which == 0) ? &_rl_syntax_colors[face_idx].start
+			: &_rl_syntax_colors[face_idx].end;
+
+  xfree (*target);
+  if (value && *value)
+    {
+      *target = (char *)xmalloc (2 * strlen (value) + 1);
+      rl_translate_keyseq (value, *target, &len);
+      (*target)[len] = '\0';
+    }
+  else
+    *target = NULL;
+
+  return 0;
+}
+
+/* **************************************************************** */
+/*								    */
 /*	 	Controlling the Meta Key and Keypad		    */
 /*								    */
 /* **************************************************************** */

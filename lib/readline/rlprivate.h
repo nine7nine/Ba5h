@@ -475,6 +475,9 @@ extern void _rl_region_color_off (void);
 extern int _rl_reset_suggestion_color (int, const char *);
 extern void _rl_suggestion_color_on (void);
 extern void _rl_suggestion_color_off (void);
+extern void _rl_syntax_color_on (int);
+extern void _rl_syntax_color_off (int);
+extern int _rl_reset_syntax_color (int, int, const char *);
 
 /* text.c */
 extern void _rl_fix_point (int);
@@ -626,6 +629,7 @@ extern int _rl_enable_inline_suggestions;
 extern int _rl_suggestion_strategy;
 extern char *_rl_suggestion_start_color;
 extern char *_rl_suggestion_end_color;
+extern int _rl_enable_syntax_highlighting;
 extern char *_rl_comment_begin;
 extern unsigned char _rl_parsing_conditionalized_out;
 extern Keymap _rl_keymap;
