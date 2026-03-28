@@ -57,6 +57,7 @@
 #include "rlprivate.h"
 #include "rlshell.h"
 #include "xmalloc.h"
+#include "suggest.h"
 
 /* Forward declarations. */
 static int rl_change_case (int, int);
@@ -280,6 +281,8 @@ rl_forward_byte (int count, int key)
       if (end > lend)
 	{
 	  rl_point = lend;
+	  if (_rl_enable_inline_suggestions && _rl_suggestion_get_len () > 0)
+	    return rl_accept_suggestion (1, key);
 	  rl_ding ();
 	}
       else
@@ -360,6 +363,8 @@ rl_forward_char (int count, int key)
     {
       if (rl_point == rl_end && EMACS_MODE())
 	{
+	  if (_rl_enable_inline_suggestions && _rl_suggestion_get_len () > 0)
+	    return rl_accept_suggestion (1, key);
 	  rl_ding ();
 	  return 0;
 	}
@@ -398,6 +403,10 @@ rl_backward_byte (int count, int key)
 
   if (count > 0)
     {
+      /* If a suggestion was just accepted, undo the entire acceptance */
+      if (_rl_enable_inline_suggestions && _rl_suggestion_was_accepted ())
+	return _rl_suggestion_undo_accept ();
+
       if (rl_point < count)
 	{
 	  rl_point = 0;
@@ -428,6 +437,10 @@ rl_backward_char (int count, int key)
 
   if (count > 0)
     {
+      /* If a suggestion was just accepted, undo the entire acceptance */
+      if (_rl_enable_inline_suggestions && _rl_suggestion_was_accepted ())
+	return _rl_suggestion_undo_accept ();
+
       point = rl_point;
 
       while (count > 0 && point > 0)
@@ -473,6 +486,8 @@ rl_beg_of_line (int count, int key)
 int
 rl_end_of_line (int count, int key)
 {
+  if (rl_point == rl_end && _rl_enable_inline_suggestions && _rl_suggestion_get_len () > 0)
+    return rl_accept_suggestion (1, key);
   rl_point = rl_end;
   return 0;
 }
@@ -491,7 +506,11 @@ rl_forward_word (int count, int key)
       if (rl_point > rl_end)
 	rl_point = rl_end;
       if (rl_point == rl_end)
-	return 0;
+	{
+	  if (_rl_enable_inline_suggestions && _rl_suggestion_get_len () > 0)
+	    return rl_accept_suggestion_word (1, key);
+	  return 0;
+	}
 
       /* If we are not in a word, move forward until we are in one.
 	 Then, move forward until we hit a non-alphabetic character. */

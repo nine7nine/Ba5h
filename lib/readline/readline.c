@@ -71,6 +71,7 @@ extern int errno;
 #include "rlprivate.h"
 #include "rlshell.h"
 #include "xmalloc.h"
+#include "suggest.h"
 
 #if defined (COLOR_SUPPORT)
 #  include "parse-colors.h"
@@ -326,6 +327,12 @@ int _rl_show_mode_in_prompt = 0;
 int _rl_enable_bracketed_paste = BRACKETED_PASTE_DEFAULT;
 int _rl_enable_active_region = BRACKETED_PASTE_DEFAULT;
 
+/* Non-zero means show inline suggestions from history as the user types. */
+int _rl_enable_inline_suggestions = 0;
+
+/* Suggestion matching strategy: 0 = prefix only, 1 = prefix then substring */
+int _rl_suggestion_strategy = 0;
+
 /* **************************************************************** */
 /*								    */
 /*			Top Level Functions			    */
@@ -556,9 +563,12 @@ _rl_internal_char_cleanup (void)
 
   if (rl_done == 0)
     {
+      _rl_suggestion_update ();
       (*rl_redisplay_function) ();
       _rl_want_redisplay = 0;
     }
+  else
+    _rl_suggestion_clear ();
 
   /* If the application writer has told us to erase the entire line if
      the only character typed was something bound to rl_newline, do so. */
@@ -1018,8 +1028,17 @@ _rl_dispatch_subseq (register int key, Keymap map, int got_subseq)
 	      (RL_ISSTATE (RL_STATE_MACROINPUT) && _rl_peek_macro_key () == 0) &&
 	      _rl_pushed_input_available () == 0 &&
 	      _rl_input_queued ((_rl_keyseq_timeout > 0) ? _rl_keyseq_timeout*1000 : 0) == 0)
-	    return (_rl_dispatch (ANYOTHERKEY, FUNCTION_TO_KEYMAP (map, key)));	      
+	    return (_rl_dispatch (ANYOTHERKEY, FUNCTION_TO_KEYMAP (map, key)));
 #endif
+
+	  /* Emacs mode: standalone ESC (no following key within timeout)
+	     dismisses the inline suggestion if one is visible. */
+	  if (EMACS_MODE () && key == ESC &&
+	      _rl_enable_inline_suggestions && _rl_suggestion_get_len () > 0 &&
+	      (RL_ISSTATE (RL_STATE_INPUTPENDING|RL_STATE_MACROINPUT) == 0) &&
+	      _rl_pushed_input_available () == 0 &&
+	      _rl_input_queued ((_rl_keyseq_timeout > 0) ? _rl_keyseq_timeout*1000 : 0) == 0)
+	    return rl_dismiss_suggestion (1, key);
 
 	  RESIZE_KEYSEQ_BUFFER ();
 	  rl_executing_keyseq[rl_key_sequence_length++] = key;

@@ -45,6 +45,7 @@
 #include "history.h"
 
 #include "rlprivate.h"
+#include "suggest.h"
 
 #if defined (HANDLE_SIGNALS)
 
@@ -624,6 +625,7 @@ rl_free_line_state (void)
   _rl_kill_kbd_macro ();
   rl_clear_message ();
   _rl_reset_argument ();
+  _rl_suggestion_clear ();
 }
 
 int

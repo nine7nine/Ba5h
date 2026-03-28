@@ -55,6 +55,11 @@ int funmap_program_specific_entry_start;
 static const FUNMAP default_funmap[] = {
   { "abort", rl_abort },
   { "accept-line", rl_newline },
+  { "accept-suggestion", rl_accept_suggestion },
+  { "accept-suggestion-word", rl_accept_suggestion_word },
+  { "dismiss-suggestion", rl_dismiss_suggestion },
+  { "suggestion-cycle-next", rl_suggestion_cycle_next },
+  { "suggestion-cycle-previous", rl_suggestion_cycle_previous },
   { "arrow-key-prefix", rl_arrow_keys },
   { "backward-byte", rl_backward_byte },
   { "backward-char", rl_backward_char },

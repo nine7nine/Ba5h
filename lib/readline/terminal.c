@@ -982,6 +982,74 @@ _rl_region_color_off (void)
 
 /* **************************************************************** */
 /*								    */
+/*	Controlling color for inline suggestions		    */
+/*								    */
+/* **************************************************************** */
+
+/* Default suggestion colors: light blue (similar to Arch Linux / Claude Code) */
+static const char *_rl_suggestion_default_start = "\033[38;5;75m";
+static const char *_rl_suggestion_default_end = "\033[0m";
+
+char *_rl_suggestion_start_color = (char *)NULL;
+char *_rl_suggestion_end_color = (char *)NULL;
+
+int
+_rl_reset_suggestion_color (int which, const char *value)
+{
+  int len;
+
+  if (which == 0)
+    {
+      xfree (_rl_suggestion_start_color);
+      if (value && *value)
+	{
+	  _rl_suggestion_start_color = (char *)xmalloc (2 * strlen (value) + 1);
+	  rl_translate_keyseq (value, _rl_suggestion_start_color, &len);
+	  _rl_suggestion_start_color[len] = '\0';
+	}
+      else
+	_rl_suggestion_start_color = NULL;
+    }
+  else
+    {
+      xfree (_rl_suggestion_end_color);
+      if (value && *value)
+	{
+	  _rl_suggestion_end_color = (char *)xmalloc (2 * strlen (value) + 1);
+	  rl_translate_keyseq (value, _rl_suggestion_end_color, &len);
+	  _rl_suggestion_end_color[len] = '\0';
+	}
+      else
+	_rl_suggestion_end_color = NULL;
+    }
+
+  return 0;
+}
+
+void
+_rl_suggestion_color_on (void)
+{
+#ifndef __MSDOS__
+  if (_rl_suggestion_start_color)
+    tputs (_rl_suggestion_start_color, 1, _rl_output_character_function);
+  else
+    tputs ((char *)_rl_suggestion_default_start, 1, _rl_output_character_function);
+#endif
+}
+
+void
+_rl_suggestion_color_off (void)
+{
+#ifndef __MSDOS__
+  if (_rl_suggestion_end_color)
+    tputs (_rl_suggestion_end_color, 1, _rl_output_character_function);
+  else
+    tputs ((char *)_rl_suggestion_default_end, 1, _rl_output_character_function);
+#endif
+}
+
+/* **************************************************************** */
+/*								    */
 /*	 	Controlling the Meta Key and Keypad		    */
 /*								    */
 /* **************************************************************** */

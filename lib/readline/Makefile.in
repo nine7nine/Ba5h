@@ -90,13 +90,13 @@ CSOURCES = $(srcdir)/readline.c $(srcdir)/funmap.c $(srcdir)/keymaps.c \
 	   $(srcdir)/shell.c $(srcdir)/tilde.c $(srcdir)/savestring.c \
 	   $(srcdir)/text.c $(srcdir)/misc.c $(srcdir)/compat.c \
 	   $(srcdir)/colors.c $(srcdir)/parse-colors.c \
-	   $(srcdir)/mbutil.c $(srcdir)/xfree.c
+	   $(srcdir)/mbutil.c $(srcdir)/xfree.c $(srcdir)/suggest.c
 
 # The header files for this library.
 HSOURCES = readline.h rldefs.h chardefs.h keymaps.h history.h histlib.h \
 	   posixstat.h posixdir.h posixjmp.h tilde.h rlconf.h rltty.h \
 	   ansi_stdlib.h rlstdc.h tcap.h xmalloc.h rlprivate.h rlshell.h \
-	   rltypedefs.h rlmbutil.h colors.h parse-colors.h
+	   rltypedefs.h rlmbutil.h colors.h parse-colors.h suggest.h
 
 HISTOBJ = history.o histexpand.o histfile.o histsearch.o shell.o savestring.o \
 	  mbutil.o
@@ -105,8 +105,8 @@ COLORSOBJ = colors.o parse-colors.o
 OBJECTS = readline.o vi_mode.o funmap.o keymaps.o parens.o search.o \
 	  rltty.o complete.o bind.o isearch.o display.o signals.o \
 	  util.o kill.o undo.o macro.o input.o callback.o terminal.o \
-	  text.o nls.o misc.o $(HISTOBJ) $(TILDEOBJ) $(COLORSOBJ) \
-	  xmalloc.o xfree.o compat.o 
+	  text.o nls.o misc.o suggest.o $(HISTOBJ) $(TILDEOBJ) $(COLORSOBJ) \
+	  xmalloc.o xfree.o compat.o
 
 # The texinfo files which document this library.
 DOCSOURCE = doc/rlman.texinfo doc/rltech.texinfo doc/rluser.texinfo
@@ -394,6 +394,12 @@ util.o: util.c
 vi_mode.o: vi_mode.c
 xfree.o: xfree.c
 xmalloc.o: xmalloc.c
+
+suggest.o: suggest.c
+suggest.o: rldefs.h ${BUILD_DIR}/config.h rlconf.h
+suggest.o: readline.h keymaps.h rltypedefs.h chardefs.h tilde.h
+suggest.o: history.h rlstdc.h
+suggest.o: rlprivate.h xmalloc.h suggest.h rlmbutil.h
 
 colors.o: colors.c
 parse-colors.o: parse-colors.c

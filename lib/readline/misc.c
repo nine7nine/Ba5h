@@ -53,6 +53,7 @@
 #include "histlib.h"
 #include "rlshell.h"
 #include "xmalloc.h"
+#include "suggest.h"
 
 static int rl_digit_loop (void);
 static void _rl_history_set_point (void);
@@ -625,6 +626,12 @@ rl_get_next_history (int count, int key)
   if (count == 0)
     return 0;
 
+  /* If an inline suggestion is visible, cycle to the next (newer) match
+     instead of navigating history.  Dismisses if at newest match. */
+  if (_rl_enable_inline_suggestions && rl_point == rl_end
+      && _rl_suggestion_get_len () > 0)
+    return rl_suggestion_cycle_next (1, key);
+
   /* If the current line has changed, save the changes. */
 #if 0	/* XXX old code can leak or corrupt rl_undo_list */
   rl_maybe_replace_line ();
@@ -691,6 +698,12 @@ rl_get_previous_history (int count, int key)
 
   if (count == 0 || history_list () == 0)
     return 0;
+
+  /* If an inline suggestion is visible, cycle to the previous (older)
+     match instead of navigating history. */
+  if (_rl_enable_inline_suggestions && rl_point == rl_end
+      && _rl_suggestion_get_len () > 0)
+    return rl_suggestion_cycle_previous (1, key);
 
   /* If we don't have a line saved, then save this one. */
   had_saved_line = _rl_saved_line_for_history != 0;

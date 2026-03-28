@@ -58,6 +58,7 @@
 
 #include "rlprivate.h"
 #include "xmalloc.h"
+#include "suggest.h"
 
 static void putc_face (int, int, char *);
 static void puts_face (const char *, const char *, int);
@@ -132,6 +133,7 @@ static int _rl_col_width (const char *, int, int, int);
 
 #define FACE_NORMAL	'0'
 #define FACE_STANDOUT	'1'
+#define FACE_SUGGESTION	'2'
 #define FACE_INVALID	((char)1)
   
 /* **************************************************************** */
@@ -809,7 +811,7 @@ rl_redisplay (void)
 {
   int in, out, c, linenum, cursor_linenum;
   int inv_botlin, lb_botlin, lb_linenum, o_cpos;
-  int newlines, lpos, temp, num;
+  int newlines, lpos, temp, num, line_content_start, lpos_at_content_start;
   char *prompt_this_line;
   char cur_face;
   int hl_begin, hl_end;
@@ -1036,6 +1038,8 @@ rl_redisplay (void)
     }
 
   prompt_last_screen_line = newlines;
+  line_content_start = out;
+  lpos_at_content_start = lpos;
 
   /* Draw the rest of the line (after the prompt) into invisible_line, keeping
      track of where the cursor is (cpos_buffer_position), the number of the
@@ -1247,6 +1251,141 @@ rl_redisplay (void)
       cpos_buffer_position = out;
       lb_linenum = newlines;
     }
+
+  /* Render inline suggestion ghost text with FACE_SUGGESTION.
+     For prefix matches: append the suggestion suffix after the typed text.
+     For substring matches: rewrite the line area with the full replacement.
+     cpos_buffer_position is already set, so the cursor stays at rl_point. */
+  {
+    const char *suggestion;
+    int slen;
+
+    suggestion = _rl_suggestion_get ();
+    slen = _rl_suggestion_get_len ();
+    if (suggestion && slen > 0 && rl_point == rl_end)
+      {
+	int max_cols, scols, si;
+#if defined (HANDLE_MULTIBYTE)
+	WCHAR_T swc;
+	size_t swc_bytes;
+	mbstate_t sps;
+	int swc_width;
+
+	memset (&sps, 0, sizeof (mbstate_t));
+#endif
+
+	if (_rl_suggestion_is_full_replacement ())
+	  {
+	    /* Substring match: rewind to line content start and render the
+	       full replacement text.  The portion matching the typed text is
+	       rendered with FACE_NORMAL; the rest with FACE_SUGGESTION.
+	       cpos_buffer_position is updated to the end of the matched
+	       portion so the cursor sits right after what was typed. */
+	    const char *repl = _rl_suggestion_get_replacement ();
+	    int rlen = repl ? (int)strlen (repl) : 0;
+
+	    if (repl && rlen > 0)
+	      {
+		const char *match_pos;
+		int match_start, match_end;
+		char sface;
+
+		match_pos = strstr (repl, rl_line_buffer);
+		match_start = match_pos ? (int)(match_pos - repl) : -1;
+		match_end = (match_start >= 0) ? match_start + rl_end : -1;
+
+		out = line_content_start;
+		max_cols = _rl_screenwidth - lpos_at_content_start;
+		scols = 0;
+		si = 0;
+		while (si < rlen && scols < max_cols)
+		  {
+		    /* Choose face: normal for the typed portion, suggestion for the rest */
+		    sface = (si >= match_start && si < match_end) ? FACE_NORMAL : FACE_SUGGESTION;
+
+		    /* Record cursor position at end of the typed portion */
+		    if (si == match_end)
+		      cpos_buffer_position = out;
+
+#if defined (HANDLE_MULTIBYTE)
+		    if (mb_cur_max > 1 && rl_byte_oriented == 0)
+		      {
+			swc_bytes = MBRTOWC (&swc, repl + si, rlen - si, &sps);
+			if (MB_INVALIDCH (swc_bytes) || MB_NULLWCH (swc_bytes))
+			  break;
+			swc_width = WCWIDTH (swc);
+			if (swc_width < 0)
+			  swc_width = 1;
+			if (scols + swc_width > max_cols)
+			  break;
+			{
+			  size_t sj;
+			  for (sj = 0; sj < swc_bytes; sj++)
+			    invis_addc (&out, repl[si + sj], sface);
+			}
+			si += swc_bytes;
+			scols += swc_width;
+		      }
+		    else
+#endif
+		      {
+			invis_addc (&out, repl[si], sface);
+			si++;
+			scols++;
+		      }
+		  }
+		/* If typed text goes to end of replacement, cursor is at out */
+		if (match_end >= rlen)
+		  cpos_buffer_position = out;
+		invis_nul (&out);
+	      }
+	  }
+	else
+	  {
+	    /* Prefix match: append the suggestion suffix after the typed text.
+	       Use lpos (column position) not byte offset -- the invisible line
+	       buffer may contain multi-byte prompt escapes that occupy zero
+	       screen columns. */
+	    max_cols = _rl_screenwidth - lpos;
+
+	    if (max_cols > 0)
+	      {
+		scols = 0;
+		si = 0;
+		while (si < slen && scols < max_cols)
+		  {
+#if defined (HANDLE_MULTIBYTE)
+		    if (mb_cur_max > 1 && rl_byte_oriented == 0)
+		      {
+			swc_bytes = MBRTOWC (&swc, suggestion + si, slen - si, &sps);
+			if (MB_INVALIDCH (swc_bytes) || MB_NULLWCH (swc_bytes))
+			  break;
+			swc_width = WCWIDTH (swc);
+			if (swc_width < 0)
+			  swc_width = 1;
+			if (scols + swc_width > max_cols)
+			  break;
+			{
+			  size_t sj;
+			  for (sj = 0; sj < swc_bytes; sj++)
+			    invis_addc (&out, suggestion[si + sj], FACE_SUGGESTION);
+			}
+			si += swc_bytes;
+			scols += swc_width;
+		      }
+		    else
+#endif
+		      {
+			invis_addc (&out, suggestion[si], FACE_SUGGESTION);
+			si++;
+			scols++;
+		      }
+		  }
+		invis_nul (&out);
+	      }
+	  }
+      }
+  }
 
   /* If we are switching from one line to multiple wrapped lines, we don't
      want to do a dumb update (or we want to make it smarter). */
@@ -1719,14 +1858,20 @@ putc_face (int c, int face, char *cur_face)
   cf = *cur_face;
   if (cf != face)
     {
-      if (cf != FACE_NORMAL && cf != FACE_STANDOUT)
+      if (cf != FACE_NORMAL && cf != FACE_STANDOUT && cf != FACE_SUGGESTION)
 	return;
-      if (face != FACE_NORMAL && face != FACE_STANDOUT)
+      if (face != FACE_NORMAL && face != FACE_STANDOUT && face != FACE_SUGGESTION)
 	return;
-      if (face == FACE_STANDOUT && cf == FACE_NORMAL)
-	_rl_region_color_on ();
-      if (face == FACE_NORMAL && cf == FACE_STANDOUT)
+      /* Turn off the old face */
+      if (cf == FACE_STANDOUT)
 	_rl_region_color_off ();
+      else if (cf == FACE_SUGGESTION)
+	_rl_suggestion_color_off ();
+      /* Turn on the new face */
+      if (face == FACE_STANDOUT)
+	_rl_region_color_on ();
+      else if (face == FACE_SUGGESTION)
+	_rl_suggestion_color_on ();
       *cur_face = face;
     }
   if (c != EOF)

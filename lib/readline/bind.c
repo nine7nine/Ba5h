@@ -1885,6 +1885,7 @@ static const struct {
   { "echo-control-characters",	&_rl_echo_control_chars,	0 },
   { "enable-active-region",	&_rl_enable_active_region,	0 },
   { "enable-bracketed-paste",	&_rl_enable_bracketed_paste,	V_SPECIAL },
+  { "enable-inline-suggestions",	&_rl_enable_inline_suggestions,	0 },
   { "enable-keypad",		&_rl_enable_keypad,		0 },
   { "enable-meta-key",		&_rl_enable_meta,		0 },
   { "expand-tilde",		&rl_complete_with_tilde_expansion, 0 },
@@ -1985,6 +1986,8 @@ static int sv_keymap (const char *);
 static int sv_seqtimeout (const char *);
 static int sv_viins_modestr (const char *);
 static int sv_vicmd_modestr (const char *);
+static int sv_suggestion_color (const char *);
+static int sv_suggestion_strategy (const char *);
 
 static const struct {
   const char * const name;
@@ -2004,7 +2007,9 @@ static const struct {
   { "isearch-terminators", V_STRING,	sv_isrchterm },
   { "keymap",		V_STRING,	sv_keymap },
   { "keyseq-timeout",	V_INT,		sv_seqtimeout },
-  { "vi-cmd-mode-string", V_STRING,	sv_vicmd_modestr }, 
+  { "suggestion-strategy", V_STRING,	sv_suggestion_strategy },
+  { "suggestion-text-color", V_STRING,	sv_suggestion_color },
+  { "vi-cmd-mode-string", V_STRING,	sv_vicmd_modestr },
   { "vi-ins-mode-string", V_STRING,	sv_viins_modestr }, 
   { (char *)NULL,	0, (_rl_sv_func_t *)0 }
 };
@@ -2221,6 +2226,24 @@ static int
 sv_region_end_color (const char *value)
 {
   return (_rl_reset_region_color (1, value));
+}
+
+static int
+sv_suggestion_color (const char *value)
+{
+  return (_rl_reset_suggestion_color (0, value));
+}
+
+static int
+sv_suggestion_strategy (const char *value)
+{
+  if (value == 0 || *value == '\0' || _rl_stricmp (value, "prefix") == 0)
+    _rl_suggestion_strategy = 0;
+  else if (_rl_stricmp (value, "substring") == 0)
+    _rl_suggestion_strategy = 1;
+  else
+    return 1;
+  return 0;
 }
 
 static int
@@ -2946,6 +2969,25 @@ _rl_get_string_variable_value (const char *name)
       else
 	numbuf[0] = '\0';
       return numbuf;
+    }
+  else if (_rl_stricmp (name, "suggestion-text-color") == 0)
+    {
+      if (_rl_suggestion_start_color == 0)
+	return 0;
+      ret = _rl_untranslate_macro_value (_rl_suggestion_start_color, 0);
+      if (ret)
+	{
+	  strncpy (numbuf, ret, sizeof (numbuf) - 1);
+	  xfree (ret);
+	  numbuf[sizeof(numbuf) - 1] = '\0';
+	}
+      else
+	numbuf[0] = '\0';
+      return numbuf;
+    }
+  else if (_rl_stricmp (name, "suggestion-strategy") == 0)
+    {
+      return (_rl_suggestion_strategy == 1 ? "substring" : "prefix");
     }
   else if (_rl_stricmp (name, "bell-style") == 0)
     {

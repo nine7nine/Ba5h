@@ -162,6 +162,13 @@ extern int rl_menu_complete (int, int);
 extern int rl_backward_menu_complete (int, int);
 extern int rl_export_completions (int, int);
 
+/* Bindable commands for inline suggestions. */
+extern int rl_accept_suggestion (int, int);
+extern int rl_accept_suggestion_word (int, int);
+extern int rl_dismiss_suggestion (int, int);
+extern int rl_suggestion_cycle_previous (int, int);
+extern int rl_suggestion_cycle_next (int, int);
+
 /* Bindable commands for killing and yanking text, and managing the kill ring. */
 extern int rl_kill_word (int, int);
 extern int rl_backward_kill_word (int, int);
