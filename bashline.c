@@ -549,6 +549,167 @@ bash_command_predictor (const char *line, int len, int *is_substring, char **rep
   return (char *)NULL;
 }
 
+/* Completion-aware predictor: uses programmable completion specs to suggest
+   arguments for known commands.  Only uses fast paths:
+   - Literal -W wordlists (no shell expansion needed)
+   - In-memory -A action flags (builtins, aliases, functions, keywords, etc.)
+   Skips -F (shell functions) and -C (external commands) entirely. */
+static char *
+bash_completion_predictor (const char *line, int len, int *is_substring, char **replacement)
+{
+  char *cmd, *word;
+  int cmd_len, word_start, word_len, i;
+  COMPSPEC *cs;
+  const char *name;
+
+  *is_substring = 0;
+  *replacement = (char *)NULL;
+
+  if (len < 2)
+    return (char *)NULL;
+
+  /* Extract the command word (first token). */
+  cmd_len = 0;
+  while (cmd_len < len && !whitespace (line[cmd_len]))
+    cmd_len++;
+
+  if (cmd_len == 0 || cmd_len >= len)
+    return (char *)NULL;	/* no space yet, or nothing after command */
+
+  cmd = (char *)alloca (cmd_len + 1);
+  memcpy (cmd, line, cmd_len);
+  cmd[cmd_len] = '\0';
+
+  /* Extract the current word being typed (last token after whitespace). */
+  word_start = len;
+  while (word_start > cmd_len && !whitespace (line[word_start - 1]))
+    word_start--;
+
+  word_len = len - word_start;
+  if (word_len <= 0)
+    return (char *)NULL;	/* no partial word to complete */
+
+  word = (char *)alloca (word_len + 1);
+  memcpy (word, line + word_start, word_len);
+  word[word_len] = '\0';
+
+  /* Look up the completion spec for this command. */
+#if defined (PROGRAMMABLE_COMPLETION)
+  cs = progcomp_search (cmd);
+  if (cs == NULL)
+    return (char *)NULL;
+
+  /* 1. Try literal -W wordlist (skip if it contains shell metacharacters). */
+  if (cs->words && cs->words[0])
+    {
+      const char *w = cs->words;
+      int has_meta = 0;
+
+      /* Check for shell metacharacters that would require expansion. */
+      for (i = 0; w[i]; i++)
+	if (w[i] == '$' || w[i] == '`' || w[i] == '\\' || w[i] == '(' || w[i] == '{')
+	  {
+	    has_meta = 1;
+	    break;
+	  }
+
+      if (!has_meta)
+	{
+	  /* Split on whitespace and prefix-match against current word. */
+	  const char *p = cs->words;
+	  while (*p)
+	    {
+	      const char *tok_start;
+	      int tok_len;
+
+	      /* Skip whitespace */
+	      while (*p && whitespace (*p))
+		p++;
+	      if (*p == '\0')
+		break;
+
+	      tok_start = p;
+	      while (*p && !whitespace (*p))
+		p++;
+	      tok_len = p - tok_start;
+
+	      if (tok_len > word_len &&
+		  strncmp (tok_start, word, word_len) == 0)
+		{
+		  /* Match found. Build the suffix. */
+		  char *suffix = (char *)xmalloc (tok_len - word_len + 1);
+		  memcpy (suffix, tok_start + word_len, tok_len - word_len);
+		  suffix[tok_len - word_len] = '\0';
+		  return suffix;
+		}
+	    }
+	}
+    }
+
+  /* 2. Try in-memory action completions (safe, no I/O). */
+
+  /* CA_BUILTIN / CA_ENABLED */
+  if (cs->actions & (CA_BUILTIN | CA_ENABLED))
+    {
+      for (i = 0; i < num_shell_builtins; i++)
+	{
+	  if ((shell_builtins[i].flags & BUILTIN_ENABLED) == 0)
+	    continue;
+	  if (!shell_builtins[i].function)
+	    continue;
+	  name = shell_builtins[i].name;
+	  if (strncmp (name, word, word_len) == 0 && name[word_len] != '\0')
+	    return savestring (name + word_len);
+	}
+    }
+
+  /* CA_ALIAS */
+#if defined (ALIAS)
+  if (cs->actions & CA_ALIAS)
+    {
+      alias_t **alist = all_aliases ();
+      if (alist)
+	{
+	  for (i = 0; alist[i]; i++)
+	    {
+	      name = alist[i]->name;
+	      if (strncmp (name, word, word_len) == 0 && name[word_len] != '\0')
+		{
+		  char *result = savestring (name + word_len);
+		  free (alist);
+		  return result;
+		}
+	    }
+	  free (alist);
+	}
+    }
+#endif
+
+  /* CA_FUNCTION */
+  if (cs->actions & CA_FUNCTION)
+    {
+      SHELL_VAR **flist = all_visible_functions ();
+      if (flist)
+	{
+	  for (i = 0; flist[i]; i++)
+	    {
+	      name = flist[i]->name;
+	      if (strncmp (name, word, word_len) == 0 && name[word_len] != '\0')
+		{
+		  char *result = savestring (name + word_len);
+		  free (flist);
+		  return result;
+		}
+	    }
+	  free (flist);
+	}
+    }
+
+#endif /* PROGRAMMABLE_COMPLETION */
+
+  return (char *)NULL;
+}
+
 /* Directory frecency predictor: suggest directories from the frecency
    database when the user is typing a cd command.  Only activates when
    the line starts with "cd " followed by a partial directory name. */
@@ -834,6 +995,7 @@ initialize_readline (void)
   rl_add_predictor ("history", _rl_history_predictor, 10);
   rl_add_predictor ("frecency", bash_frecency_predictor, 15);
   rl_add_predictor ("command", bash_command_predictor, 20);
+  rl_add_predictor ("completion", bash_completion_predictor, 25);
 
   /* Load the frecency database from disk. */
   frecency_init ();
