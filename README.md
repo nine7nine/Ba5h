@@ -12,7 +12,7 @@ Readline-level suggestion engine that renders ghost text ahead of the cursor, so
 |---|---|
 | Right Arrow | Accept full suggestion |
 | Ctrl+Right | Accept next word (partial accept) |
-| Down Arrow | Dismiss (with fade animation) |
+| Down Arrow | Dismiss suggestion |
 | Alt+Up / Alt+Down | Cycle through suggestions |
 
 ### Live Syntax Highlighting
@@ -32,8 +32,8 @@ A PowerShell `PSReadLine`-inspired predictor registry. Predictors are priority-o
 
 | Priority | Predictor | Description |
 |---|---|---|
+| 5 | **frecency** | Directory suggestions for `cd` commands |
 | 10 | **history** | History-based prefix/substring suggestions |
-| 15 | **frecency** | Directory suggestions for `cd` commands |
 | 20 | **command** | Builtin, alias, and function name completion |
 | 25 | **completion** | COMPSPEC `-W` wordlist matching |
 
@@ -51,7 +51,7 @@ The frecency predictor suggests directories for `cd` commands scored by:
 frequency / (1 + hours_since_last_visit / 4)
 ```
 
-State is persisted to `~/.bash_frecency` and hooks into `cd` via `bindpwd()`. Supports cycling through matches with Up/Down arrows, with matched text highlighted within the suggestion.
+State is persisted to `~/.bash_frecency` and updated after each successful `cd`. Supports cycling through matches with Alt+Up/Alt+Down, with matched text highlighted within the suggestion.
 
 ## Configuration
 
@@ -110,6 +110,10 @@ To use it as your default login shell:
 echo '/usr/local/bin/bash' | sudo tee -a /etc/shells
 chsh -s /usr/local/bin/bash
 ```
+
+## Specification
+
+The behavioural spec for Ba5h's interactive features is in [`spec/interactive-ux.allium`](spec/interactive-ux.allium), written in [Allium](https://github.com/juxt/allium). It captures prediction dispatch, syntax highlighting, frecency tracking, suggestion lifecycle, and the project's hard design constraints (Bash compatibility, in-memory-only predictors).
 
 ## Base Version
 
