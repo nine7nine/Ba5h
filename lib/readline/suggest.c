@@ -40,10 +40,6 @@
 #  include <unistd.h>
 #endif
 
-#if defined (HAVE_SYS_TIME_H)
-#  include <sys/time.h>
-#endif
-
 #include "rldefs.h"
 #include "rlmbutil.h"
 #include "readline.h"
@@ -651,122 +647,29 @@ rl_accept_suggestion_word (int count, int key)
   return r;
 }
 
-/* Portable millisecond sleep using select(). */
-static void
-_rl_sleep_ms (int ms)
-{
-  struct timeval tv;
-  tv.tv_sec = ms / 1000;
-  tv.tv_usec = (ms % 1000) * 1000;
-  select (0, NULL, NULL, NULL, &tv);
-}
-
-/* Compute the display width (in screen columns) of the first NBYTES
-   bytes of text S, capped to MAX_COLS.  Handles multibyte characters. */
-static int
-_rl_text_display_width (const char *s, int nbytes, int max_cols)
-{
-  int cols, si;
-
-  if (s == NULL || nbytes <= 0 || max_cols <= 0)
-    return 0;
-
-  cols = 0;
-  si = 0;
-  while (si < nbytes && cols < max_cols)
-    {
-#if defined (HANDLE_MULTIBYTE)
-      if (MB_CUR_MAX > 1 && rl_byte_oriented == 0)
-	{
-	  WCHAR_T wc;
-	  mbstate_t ps;
-	  size_t bytes;
-	  int w;
-
-	  memset (&ps, 0, sizeof (mbstate_t));
-	  bytes = MBRTOWC (&wc, s + si, nbytes - si, &ps);
-	  if (MB_INVALIDCH (bytes) || MB_NULLWCH (bytes))
-	    break;
-	  w = WCWIDTH (wc);
-	  if (w < 0)
-	    w = 1;
-	  if (cols + w > max_cols)
-	    break;
-	  si += bytes;
-	  cols += w;
-	}
-      else
-#endif
-	{
-	  si++;
-	  cols++;
-	}
-    }
-  return cols;
-}
-
-/* Animate the suggestion disappearing column-by-column from right to left.
+/* Erase the ghost suggestion text from the display.
 
    Prefix match:  cursor is at end of typed text; ghost suffix follows.
-     Animation erases the ghost suffix only.  Typed text remains.
+     Erases from cursor to end of line.  Typed text remains.
 
    Substring match:  the entire line area shows the full replacement
-     (ghost prefix + typed portion + ghost suffix).  Animation erases the
-     whole replacement and the line buffer is cleared by the caller. */
+     (ghost prefix + typed portion + ghost suffix).  Erases the whole
+     replacement area and the line buffer is cleared by the caller. */
 static void
 _rl_suggestion_dismiss_animated (void)
 {
-  int suffix_width, erase_width, right_move, col, delay_ms;
-
-  /* Width of the ghost suffix that sits past the cursor */
-  suffix_width = _rl_text_display_width (
-      _rl_suggestion_text, _rl_suggestion_len,
-      _rl_screenwidth - _rl_last_c_pos);
-
   if (_rl_suggestion_is_replacement && _rl_suggestion_replacement)
     {
-      /* Substring match: compute the width of the full replacement that
-	 was rendered.  The display code renders from the line-content
-	 start, so we compute the full replacement display width and the
-	 prefix+typed portion (everything left of the cursor). */
-      const char *repl = _rl_suggestion_replacement;
-      const char *match_pos = strstr (repl, rl_line_buffer);
-      int match_end = match_pos
-	  ? (int)(match_pos - repl) + rl_end
-	  : rl_end;
-      int prefix_typed_width = _rl_text_display_width (
-	  repl, match_end, _rl_screenwidth);
-
-      erase_width = prefix_typed_width + suffix_width;
-      right_move = suffix_width;
+      /* Substring match: cursor may be mid-line within the replacement.
+	 Move to column 0 (after prompt) and erase to end of line. */
+      if (_rl_last_c_pos > 0)
+	fprintf (rl_outstream, "\r");
+      fprintf (rl_outstream, "\033[K");
     }
   else
     {
-      /* Prefix match: only the ghost suffix after the cursor */
-      erase_width = suffix_width;
-      right_move = suffix_width;
-    }
-
-  if (erase_width <= 0)
-    return;
-
-  /* Adaptive delay: target ~400ms total, clamped to [5, 25] ms/column */
-  delay_ms = 400 / erase_width;
-  if (delay_ms < 5)
-    delay_ms = 5;
-  if (delay_ms > 25)
-    delay_ms = 25;
-
-  /* Move cursor to the rightmost column of the displayed text */
-  if (right_move > 0)
-    fprintf (rl_outstream, "\033[%dC", right_move);
-
-  /* Erase one column at a time, sweeping left */
-  for (col = erase_width; col > 0; col--)
-    {
-      fprintf (rl_outstream, "\033[D\033[K");
-      fflush (rl_outstream);
-      _rl_sleep_ms (delay_ms);
+      /* Prefix match: ghost text is after the cursor.  Erase to EOL. */
+      fprintf (rl_outstream, "\033[K");
     }
 
   fflush (rl_outstream);
