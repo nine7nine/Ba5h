@@ -1,0 +1,69 @@
+# bash_predict_completions -- Register -W wordlists for inline prediction.
+#
+# Source this from ~/.bashrc BEFORE bash-completion loads.
+# The completion predictor reads -W wordlists for instant suggestions.
+#
+# bash-completion will typically override these with -F specs for
+# interactive tab-completion, but the predictor caches the -W words
+# at registration time.  If bash-completion clobbers them, move
+# this to source AFTER bash-completion and use:
+#   complete -o default -W "words..." cmd
+# or register with -W alongside -F:
+#   complete -F _git -W "add bisect blame ..." git
+
+# Version control
+complete -W "add bisect blame branch checkout cherry-pick clean clone commit config describe diff difftool fetch format-patch grep init log merge mv pull push rebase reflog remote reset restore revert rm show shortlog stash status submodule switch tag worktree" git
+complete -W "api auth browse codespace config copilot extension gist gpg-key issue label org pr project release repo run search secret ssh-key status variable workflow" gh
+
+# Containers & orchestration
+complete -W "attach build commit compose config container context cp create diff events exec export history image images import info inspect kill load login logout logs manifest network node pause plugin port ps pull push rename restart rm rmi run save search secret service stack start stats stop system tag top trust unpause update version volume wait" docker
+complete -W "build config create down events exec images kill logs pause port ps pull push restart rm run scale start stop top unpause up version" docker-compose
+complete -W "attach build commit container cp create diff events exec export generate healthcheck history image images import info init inspect kill load login logout logs manifest mount network pause pod port ps pull push rename restart rm rmi run save search secret start stats stop system tag top unmount unpause unshare untag version volume wait" podman
+complete -W "annotate api-resources api-versions apply attach auth autoscale certificate cluster-info completion config cordon cp create debug delete describe diff drain edit events exec explain expose get kustomize label logs options patch plugin port-forward proxy replace rollout run scale set taint top uncordon version wait" kubectl
+complete -W "completion create dependency diff env get history install lint list package plugin pull push registry repo rollback search show status template test uninstall upgrade verify version" helm
+
+# System management
+complete -W "cancel cat daemon-reexec daemon-reload default disable edit emergency enable halt hybrid-sleep import-environment is-active is-enabled is-failed isolate kexec kill link list-dependencies list-jobs list-machines list-sockets list-timers list-unit-files list-units log-level log-target mask mount poweroff preset reboot reenable reload reload-or-restart rescue reset-failed restart revert set-default set-environment set-property show show-environment start status stop suspend switch-root try-reload-or-restart try-restart umount unmask unset-environment" systemctl
+complete -W "flush relinquish-var rotate sync vacuum-files vacuum-size vacuum-time verify" journalctl
+complete -W "activate attach disable-linger enable-linger flush-devices kill-session kill-user list-seats list-sessions list-users lock-session lock-sessions poweroff reboot seat-status session-status show-seat show-session show-user suspend terminate-seat terminate-session terminate-user unlock-session unlock-sessions user-status" loginctl
+complete -W "list-timezones set-local-rtc set-ntp set-time set-timezone show show-timesync status timesync-status" timedatectl
+complete -W "chassis deployment icon-name hostname set-chassis set-deployment set-hostname set-icon-name set-location status" hostnamectl
+complete -W "list-keymaps list-locales list-x11-keymap-layouts list-x11-keymap-models list-x11-keymap-options list-x11-keymap-variants set-keymap set-locale set-x11-keymap status" localectl
+complete -W "dns dnsovertls dnssec domain flush-caches log-level monitor nta query reset-server-features reset-statistics revert statistics status" resolvectl
+complete -W "delete down edit forcerenew lldp list reconfigure reload renew status up" networkctl
+complete -W "bind clone copy-from copy-to enable image-status import-fs import-raw import-tar list list-images list-transfers login poweroff pull-raw pull-tar read-only reboot remove rename set-limit shell show show-image start status stop terminate transfer" machinectl
+complete -W "debug dump info list" coredumpctl
+complete -W "call capture emit get-property introspect list log monitor set-property status tree" busctl
+
+# Package management
+complete -W "-D -F -Q -R -S -U --database --files --query --remove --sync --upgrade" pacman
+complete -W "-D -F -G -P -Q -R -S -U -Y --database --files --query --remove --sync --upgrade --getpkgbuild --print --yay" yay
+complete -W "-D -F -G -P -Q -R -S -U --database --files --query --remove --sync --upgrade --getpkgbuild --print" paru
+complete -W "autoremove build-dep changelog clean depends dist-upgrade download edit-sources full-upgrade install list policy purge rdepends reinstall remove satisfy search show showsrc source update upgrade" apt
+complete -W "alias autoremove check check-update clean deplist distro-sync downgrade group history info install leaves list makecache mark module provides reinstall remove repoinfo repolist repoquery repository-packages search swap updateinfo upgrade" dnf
+complete -W "build build-bundle build-commit-from build-export build-finish build-import-bundle build-init build-sign build-update-repo config create-usb document-export document-info document-list document-unexport enter history info install kill list make-current mask override permission-list permission-remove permission-reset permission-set permission-show pin ps remote-add remote-delete remote-info remote-list remote-ls remote-modify repair run search spawn uninstall update" flatpak
+complete -W "ack alias aliases buy changes connect connections create-cohort create-key debug disable disconnect download enable find get help info install interface known list login logout logs model okay pack prefer quote refresh remove remodel restart revert run save-key services set sign sign-build snapshot start stop switch tasks try unalias unset validate version wait warnings watch" snap
+complete -W "autoremove cleanup commands config deps desc doctor edit fetch home info install leaves link list log migrate options outdated pin reinstall remove search shellenv tap uninstall unlink unpin untap update upgrade uses" brew
+complete -W "build copy daemon derivation develop doctor edit eval flake fmt hash help key log nar path-info print-dev-env profile realisation registry repl run search shell store" nix
+
+# Networking
+complete -W "address addrlabel fou ila ioam link macsec maddress monitor mroute mrule neigh neighbor netconf netns nexthop ntable route rule sr stats tap tcpmetrics token tunnel tuntap vrf xfrm" ip
+complete -W "agent connection device general monitor networking radio" nmcli
+
+# Language toolchains
+complete -W "add bench build check clean clippy doc fetch fix fmt generate-lockfile init install locate-project login metadata new owner package pkgid publish read-manifest report run rustc rustdoc search test tree uninstall update vendor verify-project version yank" cargo
+complete -W "check completions component default doc dump-testament help install man override run self set show target toolchain uninstall update which" rustup
+complete -W "access adduser audit bugs cache ci completion config dedupe deprecate diff dist-tag docs doctor edit exec explain explore find-dupes fund get help help-search hook init install install-ci-test install-test link ll login logout ls org outdated owner pack ping pkg prefix profile prune publish query rebuild repo restart root run run-script search set shrinkwrap star stars start stop team test token uninstall unpublish unstar update version view whoami" npm
+complete -W "add audit autoclean bin cache check config create dedupe dlx exec generate-lock-entry global help import info init install licenses link list login logout node outdated owner pack patch patch-commit plugin policies publish rebuild remove run set tag team test unlink unplug upgrade upgrade-interactive version versions why workspace workspaces" yarn
+complete -W "add audit create dedupe deploy dlx doctor env exec fetch import install licenses link list login logout outdated pack patch patch-commit patch-remove prune publish rebuild remove run server setup start store test unlink update why" pnpm
+complete -W "cache check completion config debug download freeze hash help index inspect install list search show uninstall wheel" pip
+complete -W "completions ensurepath environment inject install install-all list pin reinstall reinstall-all run runpip uninstall uninstall-all uninject upgrade upgrade-all upgrade-shared" pipx
+complete -W "bug build clean doc edit env fix fmt generate get help install list mod run test tool version vet work" go
+
+# Cloud & infra
+complete -W "apply console destroy fmt force-unlock get graph import init login logout output plan providers refresh show state taint test untaint validate version workspace" terraform
+complete -W "autocomplete box cap cloud destroy global-status halt help init list-commands login package plugin port powershell provision push rdp reload resume share snapshot ssh ssh-config status suspend up upload validate version winrm winrm-config" vagrant
+
+# Misc tools
+complete -W "attach-session bind-key break-pane capture-pane choose-buffer choose-client choose-session choose-tree choose-window clear-history clock-mode command-prompt confirm-before copy-mode customize-mode delete-buffer detach-client display-menu display-message display-panes display-popup find-window has-session if-shell join-pane kill-pane kill-server kill-session kill-window last-pane last-window link-window list-buffers list-clients list-commands list-keys list-panes list-sessions list-windows load-buffer lock-client lock-server lock-session move-pane move-window new-session new-window next-layout next-window paste-buffer pipe-pane previous-layout previous-window refresh-client rename-session rename-window resize-pane resize-window respawn-pane respawn-window rotate-window run-shell save-buffer select-layout select-pane select-window send-keys send-prefix set-buffer set-environment set-hook set-option set-window-option show-buffer show-environment show-hooks show-messages show-options show-window-options source-file split-window start-server suspend-client swap-pane swap-window switch-client unbind-key unlink-window wait-for" tmux
+complete -W "add bench build check clean clippy doc fetch fix fmt generate-lockfile init install locate-project login metadata new owner package pkgid publish read-manifest report run rustc rustdoc search test tree uninstall update vendor verify-project version yank" cargo

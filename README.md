@@ -81,6 +81,7 @@ complete -W "install remove update upgrade search show list" apt
 complete -W "push pull commit checkout branch merge rebase log status diff stash clone fetch reset" git
 complete -W "build run test fmt vet mod get install" go
 ```
+( See: included .bash_predict_completions for examples )
 
 Then source the file in your `~/.bashrc`:
 
