@@ -713,12 +713,125 @@ bash_completion_predictor (const char *line, int len, int *is_substring, char **
 /* Directory frecency predictor: suggest directories from the frecency
    database when the user is typing a cd command.  Only activates when
    the line starts with "cd " followed by a partial directory name. */
+
+/* Cycling state for frecency predictor */
+static int frecency_cycle_pos = 0;
+static char *frecency_cycle_line = (char *)NULL;
+static int frecency_cycle_len = 0;
+
+/* Helper: build a frecency suggestion from the Nth match.
+   Returns malloc'd suffix or NULL.  Sets *is_substring and *replacement. */
+static char *
+frecency_build_suggestion (const char *line, int len, int n,
+			   int *is_substring, char **replacement)
+{
+  const char *query;
+  int query_len;
+  char *match;
+
+  query = line + 3;
+  query_len = len - 3;
+
+  while (query_len > 0 && (*query == ' ' || *query == '\t'))
+    {
+      query++;
+      query_len--;
+    }
+
+  match = frecency_find_nth (query, query_len, n);
+  if (match == NULL)
+    return (char *)NULL;
+
+  {
+    const char *basename;
+    int match_len = strlen (match);
+
+    basename = strrchr (match, '/');
+    basename = basename ? basename + 1 : match;
+
+    if (strncmp (basename, query, query_len) == 0)
+      {
+	char *full_line;
+	int full_len;
+	int basename_offset;
+
+	full_len = 3 + match_len;
+	full_line = (char *)xmalloc (full_len + 1);
+	snprintf (full_line, full_len + 1, "cd %s", match);
+
+	/* Tell display where the typed query appears in the replacement
+	   so it can highlight "bi" within "cd /usr/bin". */
+	basename_offset = (int)(basename - match);
+	_rl_suggestion_set_highlight (3 + basename_offset, query_len);
+
+	xfree (match);
+
+	*is_substring = 1;
+	*replacement = full_line;
+	return savestring (full_line + len);
+      }
+
+    xfree (match);
+  }
+
+  return (char *)NULL;
+}
+
+/* Cycle function for frecency predictor.  DIRECTION: -1 = previous
+   (lower-scored match), +1 = next (higher-scored match). */
+static char *
+bash_frecency_predictor_cycle (const char *line, int len, int direction,
+			       int *is_substring, char **replacement)
+{
+  char *result;
+
+  *is_substring = 0;
+  *replacement = (char *)NULL;
+
+  /* Only for "cd " commands */
+  if (len < 4 || strncmp (line, "cd ", 3) != 0)
+    return (char *)NULL;
+
+  /* Reset cycling state if line changed */
+  if (frecency_cycle_line == NULL ||
+      frecency_cycle_len != len ||
+      strncmp (frecency_cycle_line, line, len) != 0)
+    {
+      if (frecency_cycle_line)
+	free (frecency_cycle_line);
+      frecency_cycle_line = savestring (line);
+      frecency_cycle_len = len;
+      frecency_cycle_pos = 0;
+    }
+
+  if (direction == -1)
+    frecency_cycle_pos++;
+  else if (direction == +1)
+    {
+      if (frecency_cycle_pos <= 0)
+	return (char *)NULL;	/* at best match already, signal exhausted */
+      frecency_cycle_pos--;
+    }
+
+  result = frecency_build_suggestion (line, len, frecency_cycle_pos,
+				      is_substring, replacement);
+  if (result == NULL)
+    {
+      /* Went past the last match, back up */
+      if (direction == -1)
+	frecency_cycle_pos--;
+      return (char *)NULL;
+    }
+
+  return result;
+}
+
 static char *
 bash_frecency_predictor (const char *line, int len, int *is_substring, char **replacement)
 {
   const char *query;
   int query_len;
-  char *match;
+  char *result;
 
   *is_substring = 0;
   *replacement = (char *)NULL;
@@ -748,47 +861,17 @@ bash_frecency_predictor (const char *line, int len, int *is_substring, char **re
   if (*query == '/' || *query == '~')
     return (char *)NULL;
 
-  match = frecency_find (query, query_len);
-  if (match == NULL)
-    return (char *)NULL;
+  /* Reset cycling state for new query */
+  frecency_cycle_pos = 0;
+  if (frecency_cycle_line)
+    {
+      free (frecency_cycle_line);
+      frecency_cycle_line = (char *)NULL;
+    }
+  frecency_cycle_len = 0;
 
-  /* Return the suffix after what was typed: "cd <match_path>"
-     The suggestion is the remaining portion of the path. */
-  {
-    const char *basename;
-    int match_len = strlen (match);
-
-    /* Find where the query matches in the basename */
-    basename = strrchr (match, '/');
-    basename = basename ? basename + 1 : match;
-
-    /* The user typed "cd <query>", we want to suggest the rest.
-       Build: full_path minus the query portion at the end of basename.
-       Result is "cd <full_path>" with the typed prefix stripped. */
-    if (strncmp (basename, query, query_len) == 0)
-      {
-	/* Prefix match on basename: suggest as full replacement.
-	   The full suggestion line is "cd <match>". */
-	char *full_line;
-	int full_len;
-
-	full_len = 3 + match_len;
-	full_line = (char *)xmalloc (full_len + 1);
-	snprintf (full_line, full_len + 1, "cd %s", match);
-	xfree (match);
-
-	/* This is a full replacement (the entire "cd ..." line) */
-	*is_substring = 1;
-	*replacement = full_line;
-
-	/* The suffix after the typed text */
-	return savestring (full_line + len);
-      }
-
-    xfree (match);
-  }
-
-  return (char *)NULL;
+  /* Use the shared helper (which also sets highlight position) */
+  return frecency_build_suggestion (line, len, 0, is_substring, replacement);
 }
 
 /* Called once from parse.y if we are going to use readline. */
@@ -991,11 +1074,13 @@ initialize_readline (void)
   /* Register syntax highlighting callback. */
   rl_syntax_highlight_func = bash_syntax_highlight;
 
-  /* Register inline suggestion predictors (lower priority = tried first). */
-  rl_add_predictor ("history", _rl_history_predictor, 10);
-  rl_add_predictor ("frecency", bash_frecency_predictor, 15);
-  rl_add_predictor ("command", bash_command_predictor, 20);
-  rl_add_predictor ("completion", bash_completion_predictor, 25);
+  /* Register inline suggestion predictors (lower priority = tried first).
+     The fourth arg is an optional cycle function for multi-match cycling. */
+  rl_add_predictor ("history", _rl_history_predictor, NULL, 10);
+  rl_add_predictor ("frecency", bash_frecency_predictor,
+		    bash_frecency_predictor_cycle, 5);
+  rl_add_predictor ("command", bash_command_predictor, NULL, 20);
+  rl_add_predictor ("completion", bash_completion_predictor, NULL, 25);
 
   /* Load the frecency database from disk. */
   frecency_init ();

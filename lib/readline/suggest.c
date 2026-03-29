@@ -82,17 +82,28 @@ static char *_rl_suggestion_replacement = (char *)NULL;
    -1 means no match / initial state.  Used for cycling. */
 static int _rl_suggestion_match_index = -1;
 
+/* Explicit highlight position in the replacement text.
+   When highlight_start >= 0, the display code uses these instead of strstr
+   to locate the "typed" portion within the replacement.  Used by predictors
+   like frecency where the typed text doesn't appear verbatim. */
+static int _rl_suggestion_highlight_start = -1;
+static int _rl_suggestion_highlight_len = 0;
+
 /* ---- Predictor registry ---- */
 
 /* A registered prediction source. */
 typedef struct _rl_predictor_entry {
   char *name;
   rl_predictor_func_t *func;
+  rl_predictor_cycle_func_t *cycle_func;	/* optional: for multi-match cycling */
   int priority;
   struct _rl_predictor_entry *next;
 } rl_predictor_entry_t;
 
 static rl_predictor_entry_t *_rl_predictors = (rl_predictor_entry_t *)NULL;
+
+/* Which predictor produced the current suggestion (NULL = history). */
+static rl_predictor_entry_t *_rl_suggestion_predictor = (rl_predictor_entry_t *)NULL;
 
 /* Clear any active suggestion and free memory. */
 void
@@ -120,6 +131,9 @@ _rl_suggestion_clear (void)
     }
 
   _rl_suggestion_match_index = -1;
+  _rl_suggestion_predictor = (rl_predictor_entry_t *)NULL;
+  _rl_suggestion_highlight_start = -1;
+  _rl_suggestion_highlight_len = 0;
 }
 
 /* Returns non-zero if the last action was a suggestion acceptance. */
@@ -154,6 +168,27 @@ int
 _rl_suggestion_get_len (void)
 {
   return _rl_suggestion_len;
+}
+
+/* Set explicit highlight position in replacement text.  Overrides
+   the strstr-based match detection in the display code. */
+void
+_rl_suggestion_set_highlight (int start, int len)
+{
+  _rl_suggestion_highlight_start = start;
+  _rl_suggestion_highlight_len = len;
+}
+
+int
+_rl_suggestion_get_highlight_start (void)
+{
+  return _rl_suggestion_highlight_start;
+}
+
+int
+_rl_suggestion_get_highlight_len (void)
+{
+  return _rl_suggestion_highlight_len;
 }
 
 /* Returns non-zero if current suggestion is a full-line replacement
@@ -268,9 +303,12 @@ suggestion_from_history (void)
 /* ---- Predictor registry implementation ---- */
 
 /* Register a predictor.  Lower PRIORITY values are queried first.
+   CYCLE_FUNC is optional (may be NULL) -- if provided, it is called
+   when the user cycles through suggestions from this predictor.
    Returns 0 on success, -1 if NAME already exists or on error. */
 int
-rl_add_predictor (const char *name, rl_predictor_func_t *func, int priority)
+rl_add_predictor (const char *name, rl_predictor_func_t *func,
+		  rl_predictor_cycle_func_t *cycle_func, int priority)
 {
   rl_predictor_entry_t *entry, *prev, *cur;
 
@@ -285,6 +323,7 @@ rl_add_predictor (const char *name, rl_predictor_func_t *func, int priority)
   entry = (rl_predictor_entry_t *)xmalloc (sizeof (rl_predictor_entry_t));
   entry->name = savestring (name);
   entry->func = func;
+  entry->cycle_func = cycle_func;
   entry->priority = priority;
   entry->next = (rl_predictor_entry_t *)NULL;
 
@@ -360,7 +399,8 @@ _rl_history_predictor (const char *line, int len, int *is_substring, char **repl
 }
 
 /* Walk the predictor list, calling each in priority order.
-   Returns the first non-NULL result. */
+   Returns the first non-NULL result.  Sets _rl_suggestion_predictor
+   to the winning entry (or NULL if none matched). */
 static char *
 _rl_predictor_dispatch (int *is_substring_out, char **replacement_out)
 {
@@ -369,12 +409,16 @@ _rl_predictor_dispatch (int *is_substring_out, char **replacement_out)
 
   *is_substring_out = 0;
   *replacement_out = (char *)NULL;
+  _rl_suggestion_predictor = (rl_predictor_entry_t *)NULL;
 
   for (p = _rl_predictors; p; p = p->next)
     {
       result = (*p->func) (rl_line_buffer, rl_end, is_substring_out, replacement_out);
       if (result != NULL)
-	return result;
+	{
+	  _rl_suggestion_predictor = p;
+	  return result;
+	}
       /* Reset for next predictor */
       *is_substring_out = 0;
       *replacement_out = (char *)NULL;
@@ -740,6 +784,8 @@ _rl_suggestion_dismiss (void)
       _rl_suggestion_replacement = (char *)NULL;
     }
   _rl_suggestion_is_replacement = 0;
+  _rl_suggestion_highlight_start = -1;
+  _rl_suggestion_highlight_len = 0;
 
   /* Keep _rl_suggestion_cached_line intact so the dismissed-flag check
      in _rl_suggestion_update() can detect that the line is unchanged. */
@@ -787,25 +833,64 @@ _rl_suggestion_set (char *text)
   _rl_suggestion_just_accepted = 0;
 }
 
-/* Bindable command: cycle to the previous (older) matching history entry
-   and display it as the inline suggestion.  Dings if already at the
-   oldest match. */
+/* Bindable command: cycle to the previous (older) matching suggestion.
+   If the current suggestion came from a predictor with a cycle function,
+   delegates to that cycle function.  Otherwise falls back to history
+   cycling.  Dings if no more matches. */
 int
 rl_suggestion_cycle_previous (int count, int key)
 {
+  HIST_ENTRY **hist;
+  int hlen, start;
   char *suggestion;
+  int is_sub = 0;
+  char *repl = (char *)NULL;
 
   if (_rl_suggestion_text == NULL || _rl_suggestion_len == 0)
     return 0;
 
-  if (_rl_suggestion_match_index <= 0)
+  /* If a non-history predictor with a cycle function produced the
+     current suggestion, delegate cycling to it. */
+  if (_rl_suggestion_predictor && _rl_suggestion_predictor->cycle_func)
+    {
+      suggestion = (*_rl_suggestion_predictor->cycle_func)
+	(rl_line_buffer, rl_end, -1, &is_sub, &repl);
+      if (suggestion)
+	{
+	  _rl_suggestion_set (suggestion);
+	  _rl_suggestion_is_replacement = is_sub;
+	  if (_rl_suggestion_replacement)
+	    xfree (_rl_suggestion_replacement);
+	  _rl_suggestion_replacement = repl;
+	  return 0;
+	}
+      /* Predictor exhausted, ding */
+      rl_ding ();
+      return 0;
+    }
+  /* History-based cycling */
+  if (_rl_suggestion_match_index == -1)
+    {
+      /* Non-history predictor without cycle func -- try history. */
+      hist = history_list ();
+      if (hist == NULL)
+	{
+	  rl_ding ();
+	  return 0;
+	}
+      for (hlen = 0; hist[hlen]; hlen++)
+	;
+      start = hlen - 1;
+    }
+  else if (_rl_suggestion_match_index <= 0)
     {
       rl_ding ();
       return 0;
     }
+  else
+    start = _rl_suggestion_match_index - 1;
 
-  suggestion = suggestion_from_history_starting (
-      _rl_suggestion_match_index - 1, -1);
+  suggestion = suggestion_from_history_starting (start, -1);
 
   if (suggestion == NULL)
     {
@@ -817,18 +902,42 @@ rl_suggestion_cycle_previous (int count, int key)
   return 0;
 }
 
-/* Bindable command: cycle to the next (newer) matching history entry.
-   If already at the newest match (or no newer match exists), dismiss
-   the suggestion with animation. */
+/* Bindable command: cycle to the next (newer) matching suggestion.
+   For predictor-sourced suggestions, delegates to the cycle function
+   with direction +1.  If exhausted or no cycle func, dismisses. */
 int
 rl_suggestion_cycle_next (int count, int key)
 {
   HIST_ENTRY **hist;
   int hlen;
   char *suggestion;
+  int is_sub = 0;
+  char *repl = (char *)NULL;
 
   if (_rl_suggestion_text == NULL || _rl_suggestion_len == 0)
     return 0;
+
+  /* If a predictor with cycle func produced this, delegate. */
+  if (_rl_suggestion_predictor && _rl_suggestion_predictor->cycle_func)
+    {
+      suggestion = (*_rl_suggestion_predictor->cycle_func)
+	(rl_line_buffer, rl_end, +1, &is_sub, &repl);
+      if (suggestion)
+	{
+	  _rl_suggestion_set (suggestion);
+	  _rl_suggestion_is_replacement = is_sub;
+	  if (_rl_suggestion_replacement)
+	    xfree (_rl_suggestion_replacement);
+	  _rl_suggestion_replacement = repl;
+	  return 0;
+	}
+      /* Exhausted: dismiss */
+      return rl_dismiss_suggestion (count, key);
+    }
+
+  /* Non-history predictor without cycle func: dismiss */
+  if (_rl_suggestion_match_index == -1)
+    return rl_dismiss_suggestion (count, key);
 
   hist = history_list ();
   if (hist == NULL)

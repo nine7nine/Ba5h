@@ -94,6 +94,11 @@ typedef char *rl_cpcppfunc_t (char  **);
    Returns a malloc'd suffix string on success, or NULL to pass. */
 typedef char *rl_predictor_func_t (const char *, int, int *, char **);
 
+/* Predictor cycle function for iterating through multiple matches.
+   Same as predictor func but receives DIRECTION (-1 = previous/older,
+   +1 = next/newer).  Returns malloc'd suffix or NULL if exhausted. */
+typedef char *rl_predictor_cycle_func_t (const char *, int, int, int *, char **);
+
 #endif /* _RL_FUNCTION_TYPEDEF */
 
 #ifdef __cplusplus

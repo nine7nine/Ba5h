@@ -14,4 +14,7 @@ extern void frecency_update (const char *path);
    QUERY is the partial text after "cd ". */
 extern char *frecency_find (const char *query, int query_len);
 
+/* Find the Nth best match (0 = best).  Returns malloc'd path or NULL. */
+extern char *frecency_find_nth (const char *query, int query_len, int n);
+
 #endif /* _FRECENCY_H_ */

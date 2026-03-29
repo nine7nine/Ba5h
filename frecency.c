@@ -284,3 +284,79 @@ frecency_find (const char *query, int query_len)
 
   return best_path ? savestring (best_path) : (char *)NULL;
 }
+
+/* Find the Nth best frecency match (0-indexed) for a partial query.
+   Returns a malloc'd full path, or NULL if fewer than N+1 matches. */
+char *
+frecency_find_nth (const char *query, int query_len, int n)
+{
+  int i, j, match_count;
+  const char *basename;
+  double s;
+
+  /* Temporary arrays to hold matching indices and scores. */
+  int *match_idx;
+  double *match_scores;
+
+  if (query == NULL || query_len <= 0 || frecency_count == 0 || n < 0)
+    return (char *)NULL;
+
+  if (!frecency_initialized)
+    frecency_init ();
+
+  /* First pass: count matches */
+  match_count = 0;
+  for (i = 0; i < frecency_count; i++)
+    {
+      basename = strrchr (frecency_db[i].path, '/');
+      basename = basename ? basename + 1 : frecency_db[i].path;
+      if (strncmp (basename, query, query_len) == 0)
+	match_count++;
+    }
+
+  if (n >= match_count)
+    return (char *)NULL;
+
+  /* Second pass: collect matches with scores */
+  match_idx = (int *)xmalloc (match_count * sizeof (int));
+  match_scores = (double *)xmalloc (match_count * sizeof (double));
+
+  j = 0;
+  for (i = 0; i < frecency_count; i++)
+    {
+      basename = strrchr (frecency_db[i].path, '/');
+      basename = basename ? basename + 1 : frecency_db[i].path;
+      if (strncmp (basename, query, query_len) == 0)
+	{
+	  match_idx[j] = i;
+	  match_scores[j] = frecency_score (&frecency_db[i]);
+	  j++;
+	}
+    }
+
+  /* Simple selection sort to find the Nth highest score.
+     For small match sets this is fine. */
+  for (i = 0; i <= n; i++)
+    {
+      int best = i;
+      for (j = i + 1; j < match_count; j++)
+	if (match_scores[j] > match_scores[best])
+	  best = j;
+      if (best != i)
+	{
+	  double tmp_s = match_scores[i];
+	  int tmp_i = match_idx[i];
+	  match_scores[i] = match_scores[best];
+	  match_idx[i] = match_idx[best];
+	  match_scores[best] = tmp_s;
+	  match_idx[best] = tmp_i;
+	}
+    }
+
+  {
+    char *result = savestring (frecency_db[match_idx[n]].path);
+    xfree (match_idx);
+    xfree (match_scores);
+    return result;
+  }
+}

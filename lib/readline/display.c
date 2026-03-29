@@ -1349,9 +1349,20 @@ rl_redisplay (void)
 		    (*rl_syntax_highlight_func) (repl, rlen, repl_faces);
 		  }
 
-		match_pos = strstr (repl, rl_line_buffer);
-		match_start = match_pos ? (int)(match_pos - repl) : -1;
-		match_end = (match_start >= 0) ? match_start + rl_end : -1;
+		/* Check for explicitly set highlight position first
+		   (used by predictors like frecency where the typed text
+		   doesn't appear verbatim in the replacement). */
+		if (_rl_suggestion_get_highlight_start () >= 0)
+		  {
+		    match_start = _rl_suggestion_get_highlight_start ();
+		    match_end = match_start + _rl_suggestion_get_highlight_len ();
+		  }
+		else
+		  {
+		    match_pos = strstr (repl, rl_line_buffer);
+		    match_start = match_pos ? (int)(match_pos - repl) : -1;
+		    match_end = (match_start >= 0) ? match_start + rl_end : -1;
+		  }
 
 		out = line_content_start;
 		max_cols = _rl_screenwidth - lpos_at_content_start;
