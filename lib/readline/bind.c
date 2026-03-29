@@ -1886,6 +1886,7 @@ static const struct {
   { "enable-active-region",	&_rl_enable_active_region,	0 },
   { "enable-bracketed-paste",	&_rl_enable_bracketed_paste,	V_SPECIAL },
   { "enable-inline-suggestions",	&_rl_enable_inline_suggestions,	0 },
+  { "enable-menu-complete-list",	&_rl_enable_menu_complete_list,	0 },
   { "enable-syntax-highlighting",	&_rl_enable_syntax_highlighting, 0 },
   { "enable-keypad",		&_rl_enable_keypad,		0 },
   { "enable-meta-key",		&_rl_enable_meta,		0 },

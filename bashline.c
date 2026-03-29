@@ -72,6 +72,7 @@
 
 #include <glob/glob.h>
 
+#include <readline/menucomplete.h>
 #include "syntax_highlight.h"
 #include "hashcmd.h"
 #include "frecency.h"
@@ -1071,6 +1072,12 @@ initialize_readline (void)
 
   /* Register syntax highlighting callback. */
   rl_syntax_highlight_func = bash_syntax_highlight;
+
+  /* Register visual completion menu display hook.
+     The hook checks _rl_enable_menu_complete_list internally, so it's
+     safe to register unconditionally -- when disabled it falls through
+     to readline's default display. */
+  rl_completion_display_matches_hook = _rl_menu_complete_display_hook;
 
   /* Register inline suggestion predictors (lower priority = tried first).
      The fourth arg is an optional cycle function for multi-match cycling. */

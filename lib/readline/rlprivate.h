@@ -626,6 +626,7 @@ extern int _rl_enable_active_region;
 extern char *_rl_active_region_start_color;
 extern char *_rl_active_region_end_color;
 extern int _rl_enable_inline_suggestions;
+extern int _rl_enable_menu_complete_list;
 extern int _rl_suggestion_strategy;
 extern char *_rl_suggestion_start_color;
 extern char *_rl_suggestion_end_color;

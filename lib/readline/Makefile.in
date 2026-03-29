@@ -105,7 +105,7 @@ COLORSOBJ = colors.o parse-colors.o
 OBJECTS = readline.o vi_mode.o funmap.o keymaps.o parens.o search.o \
 	  rltty.o complete.o bind.o isearch.o display.o signals.o \
 	  util.o kill.o undo.o macro.o input.o callback.o terminal.o \
-	  text.o nls.o misc.o suggest.o $(HISTOBJ) $(TILDEOBJ) $(COLORSOBJ) \
+	  text.o nls.o misc.o suggest.o menucomplete.o $(HISTOBJ) $(TILDEOBJ) $(COLORSOBJ) \
 	  xmalloc.o xfree.o compat.o
 
 # The texinfo files which document this library.
@@ -400,6 +400,11 @@ suggest.o: rldefs.h ${BUILD_DIR}/config.h rlconf.h
 suggest.o: readline.h keymaps.h rltypedefs.h chardefs.h tilde.h
 suggest.o: history.h rlstdc.h
 suggest.o: rlprivate.h xmalloc.h suggest.h rlmbutil.h
+
+menucomplete.o: menucomplete.c
+menucomplete.o: rldefs.h ${BUILD_DIR}/config.h rlconf.h
+menucomplete.o: readline.h keymaps.h rltypedefs.h chardefs.h tilde.h
+menucomplete.o: rlprivate.h xmalloc.h menucomplete.h
 
 colors.o: colors.c
 parse-colors.o: parse-colors.c

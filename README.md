@@ -53,6 +53,19 @@ frequency / (1 + hours_since_last_visit / 4)
 
 State is persisted to `~/.bash_frecency` and updated after each successful `cd`. Supports cycling through matches with Alt+Up/Alt+Down, with matched text highlighted within the suggestion.
 
+### Visual Completion Menu
+
+A PowerShell `MenuComplete`-style navigable grid replaces the default match list display. When Tab produces multiple matches, a grid of completions appears below the prompt with arrow key navigation.
+
+| Keybinding | Action |
+|---|---|
+| Arrow Keys | Navigate the grid |
+| Tab / Shift+Tab | Cycle forward / backward |
+| Enter | Accept selected match |
+| Escape | Dismiss menu, restore original text |
+
+The selected match is previewed live in the input line as you navigate. Unselected items are shown in the suggestion ghost text color; the selected item is bright white. Any non-navigation key dismisses the menu and is replayed.
+
 ## Configuration
 
 ### Enabling Features (`~/.inputrc`)
@@ -63,6 +76,7 @@ Ba5h's interactive features are controlled via Readline variables. Add the follo
 set enable-inline-suggestions on
 set suggestion-strategy substring
 set enable-syntax-highlighting on
+set enable-menu-complete-list on
 ```
 
 | Variable | Values | Description |
@@ -70,6 +84,7 @@ set enable-syntax-highlighting on
 | `enable-inline-suggestions` | `on` / `off` | Enables ghost-text suggestions from history and predictors |
 | `suggestion-strategy` | `substring` / `prefix` | Match strategy for history suggestions |
 | `enable-syntax-highlighting` | `on` / `off` | Enables real-time syntax colorization of the input line |
+| `enable-menu-complete-list` | `on` / `off` | Replaces default completion list with a navigable visual menu |
 
 ### Completion Wordlists (`~/.bash_predict_completions`)
 

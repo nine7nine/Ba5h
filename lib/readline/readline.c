@@ -330,6 +330,9 @@ int _rl_enable_active_region = BRACKETED_PASTE_DEFAULT;
 /* Non-zero means show inline suggestions from history as the user types. */
 int _rl_enable_inline_suggestions = 0;
 
+/* Non-zero means use visual completion menu instead of plain match list. */
+int _rl_enable_menu_complete_list = 0;
+
 /* Suggestion matching strategy: 0 = prefix only, 1 = prefix then substring */
 int _rl_suggestion_strategy = 0;
 

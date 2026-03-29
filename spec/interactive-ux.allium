@@ -53,6 +53,10 @@ enum MatchKind { prefix_match | substring_match }
 
 enum CycleDirection { previous | next }
 
+enum MenuDirection { up | down | left | right }
+
+enum MenuOutcome { accepted | dismissed }
+
 ------------------------------------------------------------
 -- Entities
 ------------------------------------------------------------
@@ -61,12 +65,14 @@ entity InteractiveSession {
     -- Configuration (from ~/.inputrc)
     suggestions_enabled: Boolean
     highlighting_enabled: Boolean
+    menu_complete_enabled: Boolean
     suggestion_strategy: SuggestionStrategy
 
     -- Current state
     line: InputLine
     suggestion: Suggestion?
     face_map: FaceMap?
+    completion_menu: CompletionMenu?
 
     -- Relationships
     predictors: Predictor with session = this
@@ -112,6 +118,29 @@ entity FrecencyEntry {
     -- Derived
     score: frequency / (1 + hours_since(last_access) / 4)
     basename: last_segment(path, "/")
+}
+
+entity CompletionMenu {
+    session: InteractiveSession
+    matches: List<CompletionMatch>
+    selected_index: Integer
+    scroll_offset: Integer
+    columns: Integer
+    visible_rows: Integer
+
+    -- Derived
+    match_count: matches.count
+    is_active: match_count > 0
+    selected_match: matches[selected_index]
+    -- Grid position from linear index
+    selected_column: selected_index % columns
+    selected_row: selected_index / columns
+}
+
+value CompletionMatch {
+    text: String
+    display_text: String
+    is_directory: Boolean
 }
 
 external entity CommandHistory {}
@@ -528,6 +557,139 @@ rule CycleNextHistorySuggestion {
 }
 
 ------------------------------------------------------------
+-- Rules — Completion Menu
+------------------------------------------------------------
+
+-- Visual completion menu: renders a navigable grid of matches below
+-- the prompt. Modal — captures arrow keys, Enter, Escape while active.
+-- Modelled after PowerShell's MenuComplete (Ctrl+Space).
+
+rule CompletionMenuOpen {
+    when: UserRequestsCompletionMenu(session)
+    requires: session.menu_complete_enabled
+    requires: session.completion_menu = null
+    let matches = generate_completions(session.line)
+    requires: matches.count > 1
+    ensures:
+        CompletionMenu.created(
+            session: session,
+            matches: matches,
+            selected_index: 0,
+            scroll_offset: 0,
+            columns: compute_columns(matches, session),
+            visible_rows: compute_visible_rows(session)
+        )
+        -- Dismiss any active inline suggestion while menu is open.
+        session.suggestion = null
+
+    @guidance
+        -- Bound to Tab (when menu-complete-list is enabled).
+        -- Match generation uses the existing readline completion pipeline:
+        -- rl_attempted_completion_function -> bash programmable completion.
+        -- The menu only replaces the display, not the match generation.
+        -- If only one match, insert it directly (no menu needed).
+        -- If zero matches, ding (no menu).
+        -- Entering the menu is modal: readline's normal key dispatch
+        -- is suspended. Arrow keys, Enter, Escape, Tab are handled by
+        -- the menu. All other keys dismiss the menu and are replayed.
+}
+
+rule CompletionMenuNavigate {
+    when: UserNavigatesMenu(session, direction)
+    requires: session.completion_menu != null
+    let menu = session.completion_menu
+    ensures:
+        if direction = right:
+            menu.selected_index = min(menu.selected_index + 1, menu.match_count - 1)
+        if direction = left:
+            menu.selected_index = max(menu.selected_index - 1, 0)
+        if direction = down:
+            menu.selected_index = min(menu.selected_index + menu.columns, menu.match_count - 1)
+        if direction = up:
+            menu.selected_index = max(menu.selected_index - menu.columns, 0)
+        -- Adjust scroll_offset to keep selected_row visible.
+        MenuScrollAdjusted(menu)
+
+    @guidance
+        -- Arrow keys navigate the grid.
+        -- Movement wraps at grid boundaries (first/last column, first/last row).
+        -- When selection moves beyond the visible window, scroll_offset
+        -- adjusts to keep the selected row on screen.
+        -- The selected match is immediately previewed in the input line
+        -- (replacing the completion word) so the user sees the effect
+        -- before committing.
+}
+
+rule CompletionMenuCycleTab {
+    when: UserTabsInMenu(session)
+    requires: session.completion_menu != null
+    let menu = session.completion_menu
+    ensures:
+        if menu.selected_index < menu.match_count - 1:
+            menu.selected_index = menu.selected_index + 1
+        else:
+            menu.selected_index = 0
+        MenuScrollAdjusted(menu)
+
+    @guidance
+        -- Tab within the menu advances to the next match (wraps to first).
+        -- Shift+Tab moves to the previous match (wraps to last).
+        -- Provides a flat cycling alternative to arrow navigation.
+}
+
+rule CompletionMenuAccept {
+    when: UserAcceptsMenuSelection(session)
+    requires: session.completion_menu != null
+    let menu = session.completion_menu
+    let selected = menu.selected_match
+    ensures:
+        -- Insert the selected match text, replacing the completion word.
+        session.line.text = apply_completion(session.line, selected)
+        session.completion_menu = null
+        CompletionMenuClosed(session, accepted)
+
+    @guidance
+        -- Bound to Enter.
+        -- Replaces the word being completed with the selected match.
+        -- Wrapped in an undo group so a single undo reverts.
+        -- After acceptance, the menu is closed and the cursor is
+        -- positioned after the inserted text. If the match is a
+        -- directory, a trailing slash is appended.
+        -- The prompt and display are fully restored.
+}
+
+rule CompletionMenuDismiss {
+    when: UserDismissesMenu(session)
+    requires: session.completion_menu != null
+    ensures:
+        session.completion_menu = null
+        CompletionMenuClosed(session, dismissed)
+
+    @guidance
+        -- Bound to Escape.
+        -- Closes the menu without modifying the line buffer.
+        -- The original text (before any preview) is restored.
+        -- The display area used by the menu is cleared and the
+        -- prompt is redrawn cleanly.
+}
+
+rule CompletionMenuDismissOnEdit {
+    when: session: InteractiveSession.line transitions_to _
+    requires: session.completion_menu != null
+    ensures:
+        -- Any editing action (typing, backspace, etc.) that is not
+        -- a menu navigation key closes the menu. The typed key is
+        -- processed normally after the menu closes.
+        session.completion_menu = null
+        CompletionMenuClosed(session, dismissed)
+
+    @guidance
+        -- Non-navigation keys are replayed into readline after the
+        -- menu closes. This keeps the menu non-intrusive: start
+        -- typing and it gets out of the way.
+}
+
+------------------------------------------------------------
 -- Rules — Syntax Highlighting
 ------------------------------------------------------------
 
@@ -684,6 +846,22 @@ invariant BashCompatibility_HighlightingDisabled {
         not session.highlighting_enabled implies session.face_map = null
 }
 
+invariant BashCompatibility_MenuDisabled {
+    -- When menu complete list is off, Tab uses stock readline
+    -- completion display (plain text match list). The display
+    -- hook is not registered.
+    for session in InteractiveSessions:
+        not session.menu_complete_enabled implies session.completion_menu = null
+}
+
+invariant MenuAndSuggestionMutualExclusion {
+    -- The completion menu and inline suggestions cannot be active
+    -- simultaneously. Opening the menu dismisses any suggestion.
+    -- Accepting or dismissing the menu allows suggestions to resume.
+    for session in InteractiveSessions:
+        session.completion_menu != null implies session.suggestion = null
+}
+
 invariant BashCompatibility_ExecutionUnchanged {
     -- Ba5h features operate exclusively within the readline editing loop.
     -- Command parsing, execution, job control, variable expansion, and all
@@ -718,6 +896,7 @@ surface CommandLine {
         session.line
         session.suggestion
         session.face_map
+        session.completion_menu
 
     provides:
         UserAcceptsSuggestion(session)
@@ -730,6 +909,16 @@ surface CommandLine {
             when session.suggestion != null
         UserCyclesSuggestion(session, next)
             when session.suggestion != null
+        UserRequestsCompletionMenu(session)
+            when session.completion_menu = null
+        UserNavigatesMenu(session, direction)
+            when session.completion_menu != null
+        UserTabsInMenu(session)
+            when session.completion_menu != null
+        UserAcceptsMenuSelection(session)
+            when session.completion_menu != null
+        UserDismissesMenu(session)
+            when session.completion_menu != null
 
     @guarantee SuggestionsAreGhostText
         -- Suggestions are rendered as ghost text after the cursor,
@@ -739,6 +928,13 @@ surface CommandLine {
     @guarantee HighlightingIsCosmetic
         -- Syntax highlighting affects display only. The face map
         -- has no effect on command execution or suggestion logic.
+
+    @guarantee MenuIsModal
+        -- The completion menu captures key input while active.
+        -- Arrow keys navigate, Enter accepts, Escape dismisses.
+        -- Any other key dismisses the menu and is replayed into
+        -- readline for normal processing. The menu never blocks
+        -- or traps the user.
 
     @guarantee InMemoryPrediction
         -- All prediction sources are in-memory by design constraint.
@@ -757,6 +953,7 @@ surface Configuration {
     exposes:
         session.suggestions_enabled
         session.highlighting_enabled
+        session.menu_complete_enabled
         session.suggestion_strategy
 
     @guarantee RuntimeToggle
@@ -764,6 +961,7 @@ surface Configuration {
         --   enable-inline-suggestions (on/off)
         --   suggestion-strategy (prefix/substring)
         --   enable-syntax-highlighting (on/off)
+        --   enable-menu-complete-list (on/off)
 }
 
 ------------------------------------------------------------
@@ -775,6 +973,17 @@ deferred SyntaxHighlightUpdate.highlight
 
 deferred CompletionPredictorActivation.has_completion_spec
     -- see: Bash programmable completion (COMPSPEC) subsystem
+
+deferred CompletionMenuOpen.generate_completions
+    -- see: readline rl_attempted_completion_function pipeline
+
+deferred CompletionMenuOpen.compute_columns
+    -- Layout: fit as many columns as _rl_screenwidth allows,
+    -- each column sized to the widest match + padding.
+
+deferred CompletionMenuOpen.compute_visible_rows
+    -- Limit: leave at least one row for the prompt line above.
+    -- Clamp to available rows below the prompt.
 
 ------------------------------------------------------------
 -- Open Questions
