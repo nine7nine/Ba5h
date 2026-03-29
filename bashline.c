@@ -478,25 +478,23 @@ bash_command_predictor (const char *line, int len, int *is_substring, char **rep
   if (line[0] == '/' || line[0] == '.' || line[0] == '~')
     return (char *)NULL;
 
-  /* 1. Aliases */
+  /* 1. Aliases -- walk hash table directly to avoid all_aliases() overhead
+     (which allocates an array and sorts it on every call). */
 #if defined (ALIAS)
-  {
-    alias_t **alist = all_aliases ();
-    if (alist)
-      {
-	for (i = 0; alist[i]; i++)
-	  {
-	    name = alist[i]->name;
-	    if (strncmp (name, line, len) == 0 && name[len] != '\0')
-	      {
-		char *result = savestring (name + len);
-		free (alist);
-		return result;
-	      }
-	  }
-	free (alist);
-      }
-  }
+  if (aliases)
+    {
+      BUCKET_CONTENTS *item;
+      int b;
+      for (b = 0; b < aliases->nbuckets; b++)
+	{
+	  for (item = hash_items (b, aliases); item; item = item->next)
+	    {
+	      name = item->key;
+	      if (strncmp (name, line, len) == 0 && name[len] != '\0')
+		return savestring (name + len);
+	    }
+	}
+    }
 #endif
 
   /* 2. Shell builtins */
@@ -511,24 +509,27 @@ bash_command_predictor (const char *line, int len, int *is_substring, char **rep
 	return savestring (name + len);
     }
 
-  /* 3. Shell functions */
-  {
-    SHELL_VAR **flist = all_visible_functions ();
-    if (flist)
-      {
-	for (i = 0; flist[i]; i++)
-	  {
-	    name = flist[i]->name;
-	    if (strncmp (name, line, len) == 0 && name[len] != '\0')
-	      {
-		char *result = savestring (name + len);
-		free (flist);
-		return result;
-	      }
-	  }
-	free (flist);
-      }
-  }
+  /* 3. Shell functions -- walk hash table directly to avoid
+     all_visible_functions() overhead (allocates + filters). */
+  if (shell_functions)
+    {
+      BUCKET_CONTENTS *item;
+      SHELL_VAR *var;
+      int b;
+      for (b = 0; b < shell_functions->nbuckets; b++)
+	{
+	  for (item = hash_items (b, shell_functions); item; item = item->next)
+	    {
+	      var = (SHELL_VAR *)item->data;
+	      if (var && !invisible_p (var))
+		{
+		  name = item->key;
+		  if (strncmp (name, line, len) == 0 && name[len] != '\0')
+		    return savestring (name + len);
+		}
+	    }
+	}
+    }
 
   /* 4. Hashed commands (already found in PATH, in-memory lookup) */
   if (hashed_filenames)
@@ -663,45 +664,42 @@ bash_completion_predictor (const char *line, int len, int *is_substring, char **
 	}
     }
 
-  /* CA_ALIAS */
+  /* CA_ALIAS -- walk hash table directly */
 #if defined (ALIAS)
-  if (cs->actions & CA_ALIAS)
+  if ((cs->actions & CA_ALIAS) && aliases)
     {
-      alias_t **alist = all_aliases ();
-      if (alist)
+      BUCKET_CONTENTS *item;
+      int b;
+      for (b = 0; b < aliases->nbuckets; b++)
 	{
-	  for (i = 0; alist[i]; i++)
+	  for (item = hash_items (b, aliases); item; item = item->next)
 	    {
-	      name = alist[i]->name;
+	      name = item->key;
 	      if (strncmp (name, word, word_len) == 0 && name[word_len] != '\0')
-		{
-		  char *result = savestring (name + word_len);
-		  free (alist);
-		  return result;
-		}
+		return savestring (name + word_len);
 	    }
-	  free (alist);
 	}
     }
 #endif
 
-  /* CA_FUNCTION */
-  if (cs->actions & CA_FUNCTION)
+  /* CA_FUNCTION -- walk hash table directly */
+  if ((cs->actions & CA_FUNCTION) && shell_functions)
     {
-      SHELL_VAR **flist = all_visible_functions ();
-      if (flist)
+      BUCKET_CONTENTS *item;
+      SHELL_VAR *var;
+      int b;
+      for (b = 0; b < shell_functions->nbuckets; b++)
 	{
-	  for (i = 0; flist[i]; i++)
+	  for (item = hash_items (b, shell_functions); item; item = item->next)
 	    {
-	      name = flist[i]->name;
-	      if (strncmp (name, word, word_len) == 0 && name[word_len] != '\0')
+	      var = (SHELL_VAR *)item->data;
+	      if (var && !invisible_p (var))
 		{
-		  char *result = savestring (name + word_len);
-		  free (flist);
-		  return result;
+		  name = item->key;
+		  if (strncmp (name, word, word_len) == 0 && name[word_len] != '\0')
+		    return savestring (name + word_len);
 		}
 	    }
-	  free (flist);
 	}
     }
 

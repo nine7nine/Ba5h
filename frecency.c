@@ -317,9 +317,11 @@ frecency_find_nth (const char *query, int query_len, int n)
   if (n >= match_count)
     return (char *)NULL;
 
-  /* Second pass: collect matches with scores */
-  match_idx = (int *)xmalloc (match_count * sizeof (int));
-  match_scores = (double *)xmalloc (match_count * sizeof (double));
+  /* Second pass: collect matches with scores.
+     Stack-allocate for the common case (match_count <= FRECENCY_MAX_ENTRIES
+     which is 500, so worst case ~6KB on stack -- well within limits). */
+  match_idx = (int *)alloca (match_count * sizeof (int));
+  match_scores = (double *)alloca (match_count * sizeof (double));
 
   j = 0;
   for (i = 0; i < frecency_count; i++)
@@ -353,10 +355,5 @@ frecency_find_nth (const char *query, int query_len, int n)
 	}
     }
 
-  {
-    char *result = savestring (frecency_db[match_idx[n]].path);
-    xfree (match_idx);
-    xfree (match_scores);
-    return result;
-  }
+  return savestring (frecency_db[match_idx[n]].path);
 }

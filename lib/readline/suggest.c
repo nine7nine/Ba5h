@@ -56,9 +56,12 @@
 static char *_rl_suggestion_text = (char *)NULL;
 static int _rl_suggestion_len = 0;
 
-/* Cache: the line content that produced the current suggestion. */
+/* Cache: the line content that produced the current suggestion.
+   _rl_suggestion_cached_cap tracks the allocated capacity so we only
+   realloc when the line grows beyond it (grow-only strategy). */
 static char *_rl_suggestion_cached_line = (char *)NULL;
 static int _rl_suggestion_cached_len = 0;
+static int _rl_suggestion_cached_cap = 0;
 
 /* Tracks whether the last action was a suggestion acceptance, so that
    left arrow can undo it.  Cleared on any other editing action. */
@@ -105,7 +108,8 @@ static rl_predictor_entry_t *_rl_predictors = (rl_predictor_entry_t *)NULL;
 /* Which predictor produced the current suggestion (NULL = history). */
 static rl_predictor_entry_t *_rl_suggestion_predictor = (rl_predictor_entry_t *)NULL;
 
-/* Clear any active suggestion and free memory. */
+/* Clear any active suggestion and free memory.
+   Note: the cached line buffer is retained for reuse (grow-only). */
 void
 _rl_suggestion_clear (void)
 {
@@ -116,11 +120,7 @@ _rl_suggestion_clear (void)
     }
   _rl_suggestion_len = 0;
 
-  if (_rl_suggestion_cached_line)
-    {
-      xfree (_rl_suggestion_cached_line);
-      _rl_suggestion_cached_line = (char *)NULL;
-    }
+  /* Keep cached_line buffer allocated for reuse; just mark it empty. */
   _rl_suggestion_cached_len = 0;
   _rl_suggestion_just_accepted = 0;
 
@@ -531,12 +531,6 @@ _rl_suggestion_update (void)
       _rl_suggestion_replacement = (char *)NULL;
     }
 
-  if (_rl_suggestion_cached_line)
-    {
-      xfree (_rl_suggestion_cached_line);
-      _rl_suggestion_cached_line = (char *)NULL;
-    }
-
   if (_rl_predictors)
     {
       int is_sub = 0;
@@ -562,8 +556,15 @@ _rl_suggestion_update (void)
 	}
     }
 
-  /* Update cache */
-  _rl_suggestion_cached_line = savestring (rl_line_buffer);
+  /* Update cache -- grow-only buffer reuse to avoid malloc/free per keystroke */
+  if (rl_end >= _rl_suggestion_cached_cap)
+    {
+      _rl_suggestion_cached_cap = rl_end + 64;
+      _rl_suggestion_cached_line = (char *)xrealloc (_rl_suggestion_cached_line,
+						     _rl_suggestion_cached_cap + 1);
+    }
+  memcpy (_rl_suggestion_cached_line, rl_line_buffer, rl_end);
+  _rl_suggestion_cached_line[rl_end] = '\0';
   _rl_suggestion_cached_len = rl_end;
 }
 
@@ -627,15 +628,21 @@ rl_accept_suggestion_word (int count, int key)
   if (i == 0)
     return 0;
 
-  /* Insert the word portion */
-  word = (char *)xmalloc (i + 1);
-  strncpy (word, _rl_suggestion_text, i);
-  word[i] = '\0';
+  /* Insert the word portion -- use a stack buffer for the common case,
+     fall back to heap only for unusually long words. */
+  {
+    char stack_buf[256];
+    int use_heap = (i >= (int)sizeof (stack_buf));
+    word = use_heap ? (char *)xmalloc (i + 1) : stack_buf;
+    memcpy (word, _rl_suggestion_text, i);
+    word[i] = '\0';
 
-  rl_begin_undo_group ();
-  r = rl_insert_text (word);
-  rl_end_undo_group ();
-  xfree (word);
+    rl_begin_undo_group ();
+    r = rl_insert_text (word);
+    rl_end_undo_group ();
+    if (use_heap)
+      xfree (word);
+  }
 
   _rl_suggestion_just_accepted = 1;
   /* The suggestion will be updated on next _rl_suggestion_update() call */

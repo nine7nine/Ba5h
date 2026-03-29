@@ -43,9 +43,11 @@
 #define F_REDIRECT '9'
 #define F_ERROR    ':'
 
-/* Cache: avoid re-tokenizing when the line hasn't changed. */
+/* Cache: avoid re-tokenizing when the line hasn't changed.
+   cached_cap tracks allocated capacity for grow-only buffer reuse. */
 static char *cached_line = NULL;
 static int   cached_len = 0;
+static int   cached_cap = 0;
 static char *cached_faces = NULL;
 
 /* Classify a completed word in command position.  Returns the face char. */
@@ -406,13 +408,12 @@ bash_syntax_highlight (const char *line, int len, char *faces)
 	memset (faces + word_start, face, i - word_start);
     }
 
-  /* Update cache */
-  if (cached_line == NULL || cached_len < len)
+  /* Update cache -- grow-only realloc to avoid malloc/free per keystroke */
+  if (len >= cached_cap)
     {
-      free (cached_line);
-      free (cached_faces);
-      cached_line = (char *)malloc (len + 1);
-      cached_faces = (char *)malloc (len + 1);
+      cached_cap = len + 64;
+      cached_line = (char *)realloc (cached_line, cached_cap + 1);
+      cached_faces = (char *)realloc (cached_faces, cached_cap + 1);
     }
   if (cached_line && cached_faces)
     {
