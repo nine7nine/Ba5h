@@ -1,0 +1,790 @@
+-- allium: 3
+-- interactive-ux.allium
+
+-- Scope: Ba5h interactive line-editing UX
+-- Includes: Inline suggestions, syntax highlighting, pluggable prediction,
+--           frecency directory tracking, suggestion lifecycle (accept/dismiss/cycle)
+-- Excludes:
+--   - Bash execution semantics (parsing, job control, builtins beyond cd)
+--   - Readline core (key dispatch, terminal handling, undo system)
+--   - Display rendering (ANSI codes, screen geometry, multibyte width)
+-- Dependencies: None (self-contained interactive UX spec)
+--
+-- Constraint: Ba5h is a fork of GNU Bash 5.3. All features specified here
+-- are additive extensions. Upstream Bash behaviour must be preserved exactly
+-- when Ba5h features are disabled. Ba5h-specific code lives in well-defined
+-- extension points and must not alter Bash's parsing, execution, or scripting
+-- semantics.
+
+------------------------------------------------------------
+-- Value Types
+------------------------------------------------------------
+
+value InputLine {
+    text: String
+    cursor_position: Integer
+    -- Derived
+    is_empty: text = ""
+    cursor_at_end: cursor_position = length(text)
+}
+
+value FaceMap {
+    -- Per-character classification of the input line for colorization.
+    -- Each position maps to exactly one face.
+    faces: List<Face>
+}
+
+value FrecencyScore {
+    frequency: Integer
+    last_access: Timestamp
+    -- Derived
+    score: frequency / (1 + hours_since(last_access) / 4)
+}
+
+------------------------------------------------------------
+-- Enumerations
+------------------------------------------------------------
+
+enum Face { normal | keyword | builtin | string | variable | comment | operator | redirect | error }
+
+enum SuggestionStrategy { prefix | substring }
+
+enum MatchKind { prefix_match | substring_match }
+
+enum CycleDirection { previous | next }
+
+------------------------------------------------------------
+-- Entities
+------------------------------------------------------------
+
+entity InteractiveSession {
+    -- Configuration (from ~/.inputrc)
+    suggestions_enabled: Boolean
+    highlighting_enabled: Boolean
+    suggestion_strategy: SuggestionStrategy
+
+    -- Current state
+    line: InputLine
+    suggestion: Suggestion?
+    face_map: FaceMap?
+
+    -- Relationships
+    predictors: Predictor with session = this
+    frecency_db: FrecencyDatabase
+    history: CommandHistory
+}
+
+entity Suggestion {
+    session: InteractiveSession
+    suffix: String
+    match_kind: MatchKind
+    replacement: String?
+    source: Predictor?
+    highlight_start: Integer?
+    highlight_length: Integer?
+
+    -- Derived
+    is_replacement: match_kind = substring_match
+    is_active: suffix != ""
+}
+
+entity Predictor {
+    session: InteractiveSession
+    name: String
+    priority: Integer
+    supports_cycling: Boolean
+}
+
+entity FrecencyDatabase {
+    entries: FrecencyEntry with database = this
+
+    -- Derived
+    entry_count: entries.count
+    is_full: entry_count >= config.max_frecency_entries
+}
+
+entity FrecencyEntry {
+    database: FrecencyDatabase
+    path: String
+    frequency: Integer
+    last_access: Timestamp
+
+    -- Derived
+    score: frequency / (1 + hours_since(last_access) / 4)
+    basename: last_segment(path, "/")
+}
+
+external entity CommandHistory {}
+
+------------------------------------------------------------
+-- Contracts
+------------------------------------------------------------
+
+-- Behavioural properties that must be preserved across Ba5h code
+-- refinement and optimization. These are the constraints that bind
+-- any implementation change — the "what must remain true" contract.
+
+contract Ba5hExtensionDiscipline {
+    -- Ba5h code lives in isolated extension points. It must not modify
+    -- upstream Bash source files beyond minimal hook registration.
+
+    @invariant FeatureGating
+        -- Every Ba5h feature is gated by a user-controlled toggle
+        -- (inputrc variable). When the gate is off, the feature's
+        -- code path is completely inert — no allocations, no function
+        -- calls, no side effects.
+
+    @invariant InMemoryOnly
+        -- All predictors operate exclusively on in-memory data sources.
+        -- No external I/O of any kind in the prediction path: no subprocess
+        -- execution, no network, no disk reads, no PATH scanning.
+        -- This is a hard design constraint, not a performance preference.
+        -- Modelled after PowerShell's PSReadLine, which achieves instant
+        -- predictions by loading all module data into memory upfront.
+        -- The only permitted disk I/O is frecency database persistence,
+        -- which occurs on cd — outside the prediction path.
+
+    @invariant CacheCoherence
+        -- Caching (syntax highlight cache, suggestion cache) is a
+        -- performance optimization. Cached results must be identical
+        -- to freshly computed results for the same input. Cache
+        -- invalidation must occur whenever the input changes.
+
+    @invariant UpstreamIsolation
+        -- Ba5h extensions interact with Bash internals only through
+        -- stable, public interfaces: readline callbacks, shell_builtins[],
+        -- all_aliases(), all_visible_functions(), hashed_filenames,
+        -- history_list(), progcomp_search(), find_reserved_word(),
+        -- find_shell_builtin(). No patching of upstream control flow.
+
+    @invariant ZeroCostWhenDisabled
+        -- When a Ba5h feature is toggled off, its code path must have
+        -- zero runtime cost: no allocations, no function calls beyond
+        -- the initial gate check, no cache maintenance, no state tracking.
+        -- A disabled feature is as if the code doesn't exist.
+
+    @guidance
+        -- When modifying Ba5h code, verify against these constraints:
+        -- 1. Does the change preserve feature gating?
+        -- 2. Does it introduce any I/O in the prediction path? (reject — hard constraint)
+        -- 3. Does it break cache coherence?
+        -- 4. Does it require modifying upstream Bash code?
+        -- 5. Does a new predictor operate on in-memory data only?
+        -- If any answer violates, the change is rejected.
+}
+
+-- Code quality and performance targets for Ba5h-specific code.
+-- These are not behavioural rules — they are obligations on how
+-- the code is written and optimized.
+
+contract Ba5hCodeQuality {
+    @invariant MinimalAllocation
+        -- Minimize heap allocations on the hot path (per-keystroke).
+        -- Prefer stack allocation (alloca), reusable buffers, and
+        -- in-place mutation over malloc/free cycles. Every allocation
+        -- in the prediction or highlighting path should be justified.
+
+    @invariant EarlyBailout
+        -- Predictors and the tokenizer must bail out as early as
+        -- possible when they cannot contribute. Check the cheapest
+        -- disqualifying condition first (e.g., line length, prefix
+        -- check) before doing any real work.
+
+    @invariant SinglePassProcessing
+        -- The syntax highlighter operates in a single pass over the
+        -- input. Predictors scan their source (history, frecency db,
+        -- builtin list) at most once per query. No redundant iteration.
+
+    @invariant CacheBeforeRecompute
+        -- If the input hasn't changed since the last computation,
+        -- return the cached result. Applies to syntax highlighting
+        -- (cached_line/cached_faces) and suggestion state
+        -- (suggestion_cached_line). Cache checks must be O(1)
+        -- comparisons (length + memcmp), not recomputation.
+
+    @guidance
+        -- Optimization priorities for Ba5h code:
+        -- 1. Per-keystroke path must be tight: predict + highlight
+        --    runs on every character typed. Measure in microseconds.
+        -- 2. Avoid redundant work: if the line didn't change, don't
+        --    recompute. If the predictor can't match, bail immediately.
+        -- 3. Memory discipline: the readline loop is long-lived.
+        --    Leaked or fragmented allocations accumulate across a
+        --    session. Prefer deterministic lifetime (stack, cache slots).
+        -- 4. Keep the code readable: tight C does not mean clever C.
+        --    Straightforward loops over data beat complex abstractions.
+}
+
+------------------------------------------------------------
+-- Config
+------------------------------------------------------------
+
+config {
+    max_frecency_entries: Integer = 500
+}
+
+------------------------------------------------------------
+-- Defaults
+------------------------------------------------------------
+
+default Predictor history_predictor = {
+    name: "history",
+    priority: 10,
+    supports_cycling: false
+}
+
+default Predictor frecency_predictor = {
+    name: "frecency",
+    priority: 5,
+    supports_cycling: true
+}
+
+default Predictor command_predictor = {
+    name: "command",
+    priority: 20,
+    supports_cycling: false
+}
+
+default Predictor completion_predictor = {
+    name: "completion",
+    priority: 25,
+    supports_cycling: false
+}
+
+------------------------------------------------------------
+-- Rules — Prediction Framework
+------------------------------------------------------------
+
+-- Core dispatch: on each line change, walk predictors in priority order.
+-- First non-null result wins.
+
+rule PredictorDispatch {
+    when: session: InteractiveSession.line transitions_to _
+    requires: session.suggestions_enabled
+    requires: session.line.cursor_at_end
+    requires: not session.line.is_empty
+    let ordered_predictors = session.predictors ordered_by priority ascending
+    ensures:
+        SuggestionResolved(session, ordered_predictors)
+
+    @guidance
+        -- Predictors are called in priority order (lowest first).
+        -- The first predictor to return a non-null result provides the suggestion.
+        -- If no predictor matches, suggestion is cleared.
+        -- Gates: cursor must be at end of line, not in isearch/nsearch/completing/
+        -- macrodef/readstr states, not in vi command mode, not in horizontal scroll mode.
+}
+
+rule SuggestionDismissedSuppression {
+    when: session: InteractiveSession.line transitions_to _
+    requires: session.suggestion = null
+    ensures:
+        -- When a suggestion was dismissed and the line hasn't changed,
+        -- do not re-suggest until the line content actually changes.
+        session.suggestion = null
+
+    @guidance
+        -- Tracks a dismissed flag internally. Cleared when line content changes.
+}
+
+------------------------------------------------------------
+-- Rules — History Predictor
+------------------------------------------------------------
+
+rule HistoryPredictorPrefix {
+    when: HistoryPredictorQueried(session)
+    requires: session.suggestion_strategy = prefix or session.suggestion_strategy = substring
+    ensures:
+        -- Search history from most recent backwards.
+        -- Return suffix of first entry where entry starts with typed text.
+        SuggestionCandidate(session, history_predictor, prefix_match)
+
+    @guidance
+        -- Prefix match is always tried first regardless of strategy.
+        -- Returns the portion of the history entry after the typed prefix.
+}
+
+rule HistoryPredictorSubstring {
+    when: HistoryPredictorQueried(session)
+    requires: session.suggestion_strategy = substring
+    ensures:
+        -- If no prefix match, search for substring containment.
+        -- Return a full-line replacement with the matched entry.
+        SuggestionCandidate(session, history_predictor, substring_match)
+
+    @guidance
+        -- Only active when suggestion-strategy is "substring".
+        -- Skips entries identical to the typed text.
+        -- The suggestion text is the portion after the substring match position.
+        -- The replacement is the full history entry.
+}
+
+------------------------------------------------------------
+-- Rules — Frecency Predictor
+------------------------------------------------------------
+
+rule FrecencyPredictorActivation {
+    when: FrecencyPredictorQueried(session)
+    requires: starts_with(session.line.text, "cd ")
+    requires: length(session.line.text) >= 4
+    requires: not starts_with(query_after_cd(session.line.text), "/")
+    requires: not starts_with(query_after_cd(session.line.text), "~")
+    requires: query_after_cd(session.line.text) != "-"
+    let query = query_after_cd(session.line.text)
+    let best_match = session.frecency_db.entries
+        where starts_with(basename, query)
+        ordered_by score descending
+        -> first
+    requires: best_match != null
+    ensures:
+        Suggestion.created(
+            session: session,
+            suffix: remainder_after(best_match.path, session.line.text),
+            match_kind: substring_match,
+            replacement: "cd " + best_match.path,
+            source: frecency_predictor,
+            highlight_start: offset_of_basename_in("cd " + best_match.path),
+            highlight_length: length(query)
+        )
+
+    @guidance
+        -- Matches query against basename of stored paths (last path segment).
+        -- Highest-scoring match wins. Score = frequency / (1 + hours_since_last / 4).
+        -- Sets explicit highlight position so display can highlight the typed
+        -- portion within the full path suggestion.
+}
+
+rule FrecencyCyclePrevious {
+    when: UserCyclesSuggestion(session, previous)
+    requires: session.suggestion != null
+    requires: session.suggestion.source = frecency_predictor
+    ensures:
+        -- Move to the next-lower-scored frecency match.
+        -- If no more matches, ding (no change).
+        FrecencyCycleResult(session, previous)
+
+    @guidance
+        -- Alt+Up cycles to lower-scored matches.
+        -- Cycling state resets when the line content changes.
+}
+
+rule FrecencyCycleNext {
+    when: UserCyclesSuggestion(session, next)
+    requires: session.suggestion != null
+    requires: session.suggestion.source = frecency_predictor
+    ensures:
+        -- Move to the next-higher-scored frecency match.
+        -- If already at best match, dismiss suggestion.
+        FrecencyCycleResult(session, next)
+
+    @guidance
+        -- Alt+Down cycles back toward higher-scored matches.
+        -- When the best match is reached and user cycles forward again,
+        -- the suggestion is dismissed.
+}
+
+------------------------------------------------------------
+-- Rules — Command Predictor
+------------------------------------------------------------
+
+rule CommandPredictorActivation {
+    when: CommandPredictorQueried(session)
+    requires: is_simple_command_word(session.line.text)
+    requires: not starts_with(session.line.text, "/")
+    requires: not starts_with(session.line.text, ".")
+    requires: not starts_with(session.line.text, "~")
+    ensures:
+        -- Search in order: aliases, builtins, shell functions, hashed commands.
+        -- Return suffix of first prefix match.
+        SuggestionCandidate(session, command_predictor, prefix_match)
+
+    @guidance
+        -- "Simple command word" means no whitespace or shell metacharacters
+        -- (;|&({`<>) in the buffer. All sources are in-memory, no I/O.
+        -- Search order: aliases -> enabled builtins -> visible functions -> hash table.
+        -- First prefix match wins within each source; sources are tried in order.
+}
+
+------------------------------------------------------------
+-- Rules — Completion Predictor
+------------------------------------------------------------
+
+rule CompletionPredictorActivation {
+    when: CompletionPredictorQueried(session)
+    requires: length(session.line.text) >= 2
+    requires: contains_whitespace(session.line.text)
+    let cmd = first_token(session.line.text)
+    let word = last_token(session.line.text)
+    requires: length(word) > 0
+    requires: has_completion_spec(cmd)
+    ensures:
+        -- Look up COMPSPEC for cmd. Try -W wordlist first (skip if
+        -- contains shell metacharacters). Then try -A action flags.
+        -- Return suffix of first prefix match.
+        SuggestionCandidate(session, completion_predictor, prefix_match)
+
+    @guidance
+        -- Fast paths only: literal -W wordlists and -A action flags
+        -- (CA_BUILTIN, CA_ENABLED, CA_ALIAS, CA_FUNCTION).
+        -- Intentionally skips -F (shell functions) and -C (external commands)
+        -- to keep suggestions instant — no subprocess execution.
+        -- -W wordlists containing $, `, \, (, { are skipped (require expansion).
+}
+
+------------------------------------------------------------
+-- Rules — Suggestion Acceptance
+------------------------------------------------------------
+
+rule AcceptFullSuggestion {
+    when: UserAcceptsSuggestion(session)
+    requires: session.suggestion != null
+    requires: session.suggestion.is_active
+    ensures:
+        if session.suggestion.is_replacement:
+            -- Replace entire line with the full replacement text.
+            session.line.text = session.suggestion.replacement
+        else:
+            -- Append the suggestion suffix to the current line.
+            session.line.text = session.line.text + session.suggestion.suffix
+        session.suggestion = null
+
+    @guidance
+        -- Bound to Right Arrow.
+        -- Wrapped in an undo group so a single undo reverts the entire acceptance.
+}
+
+rule AcceptSuggestionWord {
+    when: UserAcceptsSuggestionWord(session)
+    requires: session.suggestion != null
+    requires: session.suggestion.is_active
+    ensures:
+        if session.suggestion.is_replacement:
+            -- For substring matches, accept-word accepts the full replacement.
+            session.line.text = session.suggestion.replacement
+        else:
+            -- Append the next word from the suggestion suffix.
+            session.line.text = session.line.text + next_word(session.suggestion.suffix)
+        session.suggestion = null
+
+    @guidance
+        -- Bound to Ctrl+Right.
+        -- For prefix matches, "next word" skips leading whitespace then takes
+        -- characters until the next whitespace boundary.
+        -- For substring matches, word-by-word doesn't apply — accepts full replacement.
+}
+
+------------------------------------------------------------
+-- Rules — Suggestion Dismissal
+------------------------------------------------------------
+
+rule DismissSuggestion {
+    when: UserDismissesSuggestion(session)
+    requires: session.suggestion != null
+    requires: session.suggestion.is_active
+    ensures:
+        if session.suggestion.is_replacement:
+            -- Erase the full visual replacement and clear the line.
+            session.line.text = ""
+        session.suggestion = null
+        SuggestionDismissed(session)
+
+    @guidance
+        -- Bound to Down Arrow.
+        -- Instantly erases ghost text via terminal clear-to-end-of-line.
+        -- For prefix matches: only ghost suffix is erased, typed text preserved.
+        -- For substring matches: entire visual line is erased and buffer cleared.
+}
+
+------------------------------------------------------------
+-- Rules — Suggestion Cycling (History)
+------------------------------------------------------------
+
+rule CyclePreviousHistorySuggestion {
+    when: UserCyclesSuggestion(session, previous)
+    requires: session.suggestion != null
+    requires: session.suggestion.source = history_predictor or session.suggestion.source = null
+    ensures:
+        -- Search history backwards from current match for next older match.
+        -- If no more matches, ding.
+        HistoryCycleResult(session, previous)
+
+    @guidance
+        -- Bound to Alt+Up.
+        -- Searches from the entry before the current match, going backwards.
+}
+
+rule CycleNextHistorySuggestion {
+    when: UserCyclesSuggestion(session, next)
+    requires: session.suggestion != null
+    requires: session.suggestion.source = history_predictor or session.suggestion.source = null
+    ensures:
+        -- Search history forwards from current match for next newer match.
+        -- If no more matches, dismiss suggestion.
+        HistoryCycleResult(session, next)
+
+    @guidance
+        -- Bound to Alt+Down.
+        -- When newest match is reached and user cycles forward, dismisses.
+}
+
+------------------------------------------------------------
+-- Rules — Syntax Highlighting
+------------------------------------------------------------
+
+rule SyntaxHighlightUpdate {
+    when: session: InteractiveSession.line transitions_to _
+    requires: session.highlighting_enabled
+    requires: not session.line.is_empty
+    ensures:
+        session.face_map = highlight(session.line.text)
+
+    @guidance
+        -- Single-pass state-machine tokenizer classifies each byte position.
+        -- Classification order (precedence by parse position):
+        --   1. Comments (# at start of word in command position -> rest of line)
+        --   2. Single-quoted strings ('...')
+        --   3. Double-quoted strings ("..." with nested $var and $(...))
+        --   4. ANSI-C strings ($'...')
+        --   5. Variables ($var, ${var}, special vars $?, $!, $#, $@, $*, $-, $0-$9)
+        --   6. Backslash escapes
+        --   7. Control operators (; | && || & ( ))
+        --   8. Redirection operators (> >> < << &> <& >& etc.)
+        --   9. Backtick command substitution (`...`)
+        --  10. Regular words (classified as keyword, builtin, or normal)
+        --
+        -- Word classification:
+        --   - Keywords (if, then, for, while, etc.) always get keyword face
+        --   - Builtins (cd, echo, export, etc.) get builtin face only in command position
+        --   - All other words get normal face
+        --
+        -- Command position resets after: control operators, start of line.
+        -- Command position clears after: first word followed by whitespace.
+        --
+        -- Unclosed quotes (single or double) mark the opening quote as error face.
+        --
+        -- Results are cached; unchanged lines skip re-tokenization.
+}
+
+------------------------------------------------------------
+-- Rules — Frecency Database
+------------------------------------------------------------
+
+rule RecordDirectoryVisit {
+    when: DirectoryChanged(session, path)
+    requires: path != ""
+    ensures:
+        if existing_entry(session.frecency_db, path) != null:
+            let entry = existing_entry(session.frecency_db, path)
+            entry.frequency = entry.frequency + 1
+            entry.last_access = now
+        else:
+            if session.frecency_db.is_full:
+                EvictLowestEntry(session.frecency_db)
+            FrecencyEntry.created(
+                database: session.frecency_db,
+                path: path,
+                frequency: 1,
+                last_access: now
+            )
+        FrecencyDatabasePersisted(session.frecency_db)
+
+    @guidance
+        -- Triggered by successful cd (hooked into the cd builtin via bindpwd).
+        -- Persisted to ~/.bash_frecency in format: path|frequency|timestamp
+        -- one entry per line.
+}
+
+rule EvictLowestScoredEntry {
+    when: EvictLowestEntry(database)
+    let worst = database.entries ordered_by score ascending -> first
+    ensures:
+        not exists worst
+
+    @guidance
+        -- Eviction happens when the database reaches max_frecency_entries (500).
+        -- The entry with the lowest frecency score is removed.
+        -- Score = frequency / (1 + hours_since_last_access / 4).
+}
+
+------------------------------------------------------------
+-- Rules — Predictor Registry
+------------------------------------------------------------
+
+rule RegisterPredictor {
+    when: RegisterPredictor(session, name, priority, supports_cycling)
+    requires: not session.predictors.any(p => p.name = name)
+    ensures:
+        Predictor.created(
+            session: session,
+            name: name,
+            priority: priority,
+            supports_cycling: supports_cycling
+        )
+
+    @guidance
+        -- Predictors are inserted sorted by priority (lower = queried first).
+        -- Duplicate names are rejected.
+        -- Default registration order at initialization:
+        --   frecency (5), history (10), command (20), completion (25)
+}
+
+rule RemovePredictor {
+    when: RemovePredictor(session, name)
+    let predictor = session.predictors where name = name -> first
+    requires: predictor != null
+    ensures:
+        not exists predictor
+}
+
+------------------------------------------------------------
+-- Invariants
+------------------------------------------------------------
+
+invariant UniquePredictorNames {
+    for session in InteractiveSessions:
+        for p1 in session.predictors:
+            for p2 in session.predictors:
+                p1 = p2 or p1.name != p2.name
+}
+
+invariant FrecencyDatabaseSizeLimit {
+    for db in FrecencyDatabases:
+        db.entry_count <= config.max_frecency_entries
+}
+
+invariant FrecencyScoreNonNegative {
+    for entry in FrecencyEntries:
+        entry.frequency >= 1
+}
+
+invariant SuggestionRequiresContent {
+    for session in InteractiveSessions:
+        session.suggestion != null implies not session.line.is_empty
+}
+
+invariant HighlightRequiresContent {
+    for session in InteractiveSessions:
+        session.face_map != null implies not session.line.is_empty
+}
+
+-- Bash compatibility: Ba5h features are strictly additive.
+-- When disabled, the shell behaves identically to upstream Bash 5.3.
+
+invariant BashCompatibility_SuggestionsDisabled {
+    -- When suggestions are off, no suggestion state exists and no
+    -- predictor is ever queried. The readline loop behaves as stock Bash.
+    for session in InteractiveSessions:
+        not session.suggestions_enabled implies session.suggestion = null
+}
+
+invariant BashCompatibility_HighlightingDisabled {
+    -- When highlighting is off, no face map is computed. Display
+    -- rendering follows the unmodified readline code path.
+    for session in InteractiveSessions:
+        not session.highlighting_enabled implies session.face_map = null
+}
+
+invariant BashCompatibility_ExecutionUnchanged {
+    -- Ba5h features operate exclusively within the readline editing loop.
+    -- Command parsing, execution, job control, variable expansion, and all
+    -- scripting semantics are identical to upstream Bash 5.3 regardless of
+    -- whether Ba5h features are enabled or disabled.
+    for session in InteractiveSessions:
+        session.suggestions_enabled or not session.suggestions_enabled
+        -- This invariant is structural: it asserts that no rule in this
+        -- spec modifies any entity or state outside the interactive editing
+        -- domain. The assertion is tautological by design — its value is
+        -- as a documented constraint for implementors and reviewers.
+}
+
+------------------------------------------------------------
+-- Actor Declarations
+------------------------------------------------------------
+
+actor User {
+    identified_by: session: InteractiveSession
+}
+
+------------------------------------------------------------
+-- Surfaces
+------------------------------------------------------------
+
+surface CommandLine {
+    facing user: User
+
+    context session: InteractiveSession where session = user.session
+
+    exposes:
+        session.line
+        session.suggestion
+        session.face_map
+
+    provides:
+        UserAcceptsSuggestion(session)
+            when session.suggestion != null
+        UserAcceptsSuggestionWord(session)
+            when session.suggestion != null
+        UserDismissesSuggestion(session)
+            when session.suggestion != null
+        UserCyclesSuggestion(session, previous)
+            when session.suggestion != null
+        UserCyclesSuggestion(session, next)
+            when session.suggestion != null
+
+    @guarantee SuggestionsAreGhostText
+        -- Suggestions are rendered as ghost text after the cursor,
+        -- visually distinct from typed input. They never modify the
+        -- line buffer until explicitly accepted.
+
+    @guarantee HighlightingIsCosmetic
+        -- Syntax highlighting affects display only. The face map
+        -- has no effect on command execution or suggestion logic.
+
+    @guarantee InMemoryPrediction
+        -- All prediction sources are in-memory by design constraint.
+        -- No subprocess execution, no network, no disk reads, no PATH
+        -- scanning — ever. Frecency database persistence occurs on cd,
+        -- outside the prediction path. This is not a performance
+        -- optimization; it is a design constraint modelled after
+        -- PowerShell's PSReadLine approach.
+}
+
+surface Configuration {
+    facing user: User
+
+    context session: InteractiveSession where session = user.session
+
+    exposes:
+        session.suggestions_enabled
+        session.highlighting_enabled
+        session.suggestion_strategy
+
+    @guarantee RuntimeToggle
+        -- Features can be toggled at runtime via ~/.inputrc variables:
+        --   enable-inline-suggestions (on/off)
+        --   suggestion-strategy (prefix/substring)
+        --   enable-syntax-highlighting (on/off)
+}
+
+------------------------------------------------------------
+-- Deferred Specifications
+------------------------------------------------------------
+
+deferred SyntaxHighlightUpdate.highlight
+    -- see: spec/syntax-tokenizer.allium (detailed state machine spec)
+
+deferred CompletionPredictorActivation.has_completion_spec
+    -- see: Bash programmable completion (COMPSPEC) subsystem
+
+------------------------------------------------------------
+-- Open Questions
+------------------------------------------------------------
+
+open question "Should frecency matching support substring/fuzzy matching in addition to prefix matching on basename?"
+
+-- Resolved: Predictors are in-memory only. No external I/O, no async.
+-- This is a design constraint, not an open question. See Ba5hExtensionDiscipline.InMemoryOnly.
+
+open question "Should there be a configurable predictor priority or enable/disable per-predictor via inputrc?"
+
+open question "Should syntax highlighting support user-configurable face colors via inputrc or a theme file?"
